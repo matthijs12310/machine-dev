@@ -1,0 +1,13 @@
+{
+    "root": {
+        "uniqueid": "75588DE7-1050-EA2A-6595-6A90EA186115",
+        "named_devices": [
+            {
+                "name": "Matthijs",
+                "cert": "-----BEGIN CERTIFICATE-----\nMIICvzCCAaegAwIBAgIBADANBgkqhkiG9w0BAQsFADAjMSEwHwYDVQQDDBhOVklE\nSUEgR2FtZVN0cmVhbSBDbGllbnQwHhcNMTkxMjI2MTEzNTA4WhcNMjkxMjIzMTEz\nNTA4WjAjMSEwHwYDVQQDDBhOVklESUEgR2FtZVN0cmVhbSBDbGllbnQwggEiMA0G\nCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAHtW\/6Mkd2GGE+DrK6iwBCgaJUAux\nK2zmcfyWi9KwVVQcrLik1YkeW4E9tSpOOaNONyZOpZxUKDRQKV30DemP8orfmQuI\nqeVk32RtNlCA0CGSDM\/XrkwqhrrM2Ij3v9LIGlhpdE3yjdfdqMiEUazyboDEPbgn\neiN\/EnY0rc0eRe1wOJ6SBXTa7HCjGYlMxVQNN3fFQX4hi+uy4HfTLLeCJEeTMGyx\np+zaAlOA3Lo7CNfnnKJucyNUeJDW8rkGjf4olAnK7FBM6mBVmbEnhS+9k9RnGRbq\n1ekg2JdPlQ9nGZxPmeoRkAjg+rJ\/qGQdCfaCUnB0aHA82P4VEhCV3RiTAgMBAAEw\nDQYJKoZIhvcNAQELBQADggEBAEBqkys61v6FhY\/EngUu0Er6PyjuRZLG4J5RziKh\ngkWfzLvLt5AUp5Trs\/E1cMBO0rQnJgt676WL6s5Sk1fPb3d1M8COQpzqF6UBiULi\nQ+9wd4\/gUL\/fCwwy+nDGTxUjeNHW+gFFtAWcF3ZjrRA9oAlTW3Xjf8ZCeXdQHAJE\nFA9WfkKPA+Ct0DUPScy2Z3KY9R48Tg0k0Qgpz\/vQLY4gOr\/v0h8jOpW2+Q5dZQ+1\nqY3by6Is8dvTsKCCRQOTjfCv\/\/oq1zoQvQqaPr9m4vhtP9hxupEZ90ZgAopa2ukJ\noP6eOrplm1x1bYGe58ZlghlZhxgzLTiATmT1f5auvWCRTSY=\n-----END CERTIFICATE-----\n",
+                "uuid": "38AEA243-8AE2-8C0C-5009-F0EA8D7E32F0",
+                "enabled": "true"
+            }
+        ]
+    }
+}
