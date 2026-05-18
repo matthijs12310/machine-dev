@@ -92,7 +92,7 @@ start_steam_as_user() {
     LC_ALL=C.UTF-8 \
     GTK_A11Y=none \
     SDL_VIDEODRIVER=x11 \
-    steam
+    dbus-run-session -- steam
 }
 
 start_steam_current_user() {
@@ -112,7 +112,7 @@ start_steam_current_user() {
   echo "Starting Steam as current user on DISPLAY=${DISPLAY}"
   echo "Command: steam"
 
-  exec steam
+  exec dbus-run-session -- steam
 }
 
 main() {
