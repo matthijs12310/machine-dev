@@ -1,11 +1,17 @@
 {
     "root": {
-        "uniqueid": "75588DE7-1050-EA2A-6595-6A90EA186115",
+        "uniqueid": "BB4F443D-CCEB-B428-A207-03135D2B93D0",
         "named_devices": [
             {
-                "name": "Matthijs",
+                "name": "pc",
+                "cert": "-----BEGIN CERTIFICATE-----\nMIICvzCCAaegAwIBAgIBADANBgkqhkiG9w0BAQsFADAjMSEwHwYDVQQDDBhOVklE\nSUEgR2FtZVN0cmVhbSBDbGllbnQwHhcNMjUwMzA0MTExNjE1WhcNNDUwMjI3MTEx\nNjE1WjAjMSEwHwYDVQQDDBhOVklESUEgR2FtZVN0cmVhbSBDbGllbnQwggEiMA0G\nCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCrH2l+LTNuLivlDEA1mUMkK9MUEkce\nXsOu7adjgQZ4dKjIMRJAvE8DhLdBB\/iNDEbxQ2r4V0eHH43IeALPHNoXsX1ZXkS9\na\/yT+qFJlGL95wIVzNNxjvm\/4vjBgB0hH+sOyHGNEeDKq5z7WYA0BTYex2FLBmPL\naBdevpm5Fqw2wSwMrG+Vcx9ThOHAYAxUoqrGRwgtL9\/wEfMBzU7y9lmZ+tW32x9z\ntVequaFiPDC+CvttEqqm4BfwLz593okrwKeTqekTGzF9tTrQOBp9WrgyC\/sHk02P\n+Zck2F2nbeWTYqzuVMDXKR9785R9\/ZmqVHp6v0tYKPceywFlHZ5PHcCDAgMBAAEw\nDQYJKoZIhvcNAQELBQADggEBAGqQQOoQ+OTaeoHUHqkJrtwSz5tcQovi4di+aHo+\nQxsS81pitZe4bc2fH9BnJFRlupnQbZa87HuzrKmYdqkgDzaSA3FRB\/APokSUZv+r\n0HPaV2AJeNj3Won9WR3zRjv7qlZvM3CDUcurkD8qhknlXrJeYQMkqHErSlBn32tm\n3Y4lJon8HoMvECMj0IrLJstWqwMdjbqX7ag9\/8INKlwlgaHbAAQM\/QPLh1Ecu+\/I\nZOjiukZiqVFFglBtc+E7nbcBRvGFjaIOiuB34KCnI8LmK9AvGxJCEgbUvo3SK532\n9tolJSbGZeqZ4i6gP7QQQdoY6FofRUeTQfZCywMM4g+1xao=\n-----END CERTIFICATE-----\n",
+                "uuid": "F8368FC9-0616-CC01-5C0A-23E90EC3C6A1",
+                "enabled": "true"
+            },
+            {
+                "name": "iphone",
                 "cert": "-----BEGIN CERTIFICATE-----\nMIICvzCCAaegAwIBAgIBADANBgkqhkiG9w0BAQsFADAjMSEwHwYDVQQDDBhOVklE\nSUEgR2FtZVN0cmVhbSBDbGllbnQwHhcNMTkxMjI2MTEzNTA4WhcNMjkxMjIzMTEz\nNTA4WjAjMSEwHwYDVQQDDBhOVklESUEgR2FtZVN0cmVhbSBDbGllbnQwggEiMA0G\nCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDAHtW\/6Mkd2GGE+DrK6iwBCgaJUAux\nK2zmcfyWi9KwVVQcrLik1YkeW4E9tSpOOaNONyZOpZxUKDRQKV30DemP8orfmQuI\nqeVk32RtNlCA0CGSDM\/XrkwqhrrM2Ij3v9LIGlhpdE3yjdfdqMiEUazyboDEPbgn\neiN\/EnY0rc0eRe1wOJ6SBXTa7HCjGYlMxVQNN3fFQX4hi+uy4HfTLLeCJEeTMGyx\np+zaAlOA3Lo7CNfnnKJucyNUeJDW8rkGjf4olAnK7FBM6mBVmbEnhS+9k9RnGRbq\n1ekg2JdPlQ9nGZxPmeoRkAjg+rJ\/qGQdCfaCUnB0aHA82P4VEhCV3RiTAgMBAAEw\nDQYJKoZIhvcNAQELBQADggEBAEBqkys61v6FhY\/EngUu0Er6PyjuRZLG4J5RziKh\ngkWfzLvLt5AUp5Trs\/E1cMBO0rQnJgt676WL6s5Sk1fPb3d1M8COQpzqF6UBiULi\nQ+9wd4\/gUL\/fCwwy+nDGTxUjeNHW+gFFtAWcF3ZjrRA9oAlTW3Xjf8ZCeXdQHAJE\nFA9WfkKPA+Ct0DUPScy2Z3KY9R48Tg0k0Qgpz\/vQLY4gOr\/v0h8jOpW2+Q5dZQ+1\nqY3by6Is8dvTsKCCRQOTjfCv\/\/oq1zoQvQqaPr9m4vhtP9hxupEZ90ZgAopa2ukJ\noP6eOrplm1x1bYGe58ZlghlZhxgzLTiATmT1f5auvWCRTSY=\n-----END CERTIFICATE-----\n",
-                "uuid": "38AEA243-8AE2-8C0C-5009-F0EA8D7E32F0",
+                "uuid": "598C2780-FA26-D000-3407-B1D5F40F91EA",
                 "enabled": "true"
             }
         ]
