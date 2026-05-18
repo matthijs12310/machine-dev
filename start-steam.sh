@@ -17,6 +17,9 @@ xdg_cache_home="${steam_home}/.cache"
 pulse_server="${PULSE_SERVER:-unix:${runtime_dir}/pulse/native}"
 steam_session_archive="${STEAM_SESSION_ARCHIVE:-}"
 steam_session_url="${STEAM_SESSION_URL:-}"
+steam_session_repo="${STEAM_SESSION_REPO:-matthijs12310/machine-dev}"
+steam_session_asset_id="${STEAM_SESSION_ASSET_ID:-423715286}"
+steam_session_token="${STEAM_SESSION_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
 steam_restore_force="${STEAM_RESTORE_FORCE:-0}"
 
 need_root_for_install() {
@@ -120,16 +123,32 @@ find_steam_session_archive() {
 download_steam_session_archive() {
   local target="/tmp/steam-session-restore.tar.gz"
 
-  [ -n "$steam_session_url" ] || return 1
   command -v curl >/dev/null 2>&1 || return 1
 
-  case "$steam_session_url" in
-    *.tar.zst|*.zst) target="/tmp/steam-session-restore.tar.zst" ;;
-    *.tgz) target="/tmp/steam-session-restore.tgz" ;;
-  esac
+  if [ -n "$steam_session_url" ]; then
+    case "$steam_session_url" in
+      *.tar.zst|*.zst) target="/tmp/steam-session-restore.tar.zst" ;;
+      *.tgz) target="/tmp/steam-session-restore.tgz" ;;
+    esac
 
-  echo "Downloading Steam session archive from STEAM_SESSION_URL" >&2
-  curl -fL "$steam_session_url" -o "$target"
+    echo "Downloading Steam session archive from STEAM_SESSION_URL" >&2
+    curl -fL "$steam_session_url" -o "$target"
+    echo "$target"
+    return 0
+  fi
+
+  [ -n "$steam_session_asset_id" ] || return 1
+  [ -n "$steam_session_token" ] || {
+    echo "Steam session release asset configured, but no token found. Set STEAM_SESSION_TOKEN, GH_TOKEN, or GITHUB_TOKEN." >&2
+    return 1
+  }
+
+  echo "Downloading Steam session archive asset ${steam_session_asset_id} from ${steam_session_repo}" >&2
+  curl -fL \
+    -H "Authorization: Bearer ${steam_session_token}" \
+    -H "Accept: application/octet-stream" \
+    "https://api.github.com/repos/${steam_session_repo}/releases/assets/${steam_session_asset_id}" \
+    -o "$target"
   echo "$target"
 }
 

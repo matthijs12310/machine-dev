@@ -142,6 +142,9 @@ jobs:
           sudo systemctl restart ssh || sudo /usr/sbin/sshd
 
       - name: Install scripts and restore Sunshine pairing state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STEAM_SESSION_ASSET_ID: "423715286"
         run: |
           set -euo pipefail
 
@@ -163,6 +166,16 @@ jobs:
             /root/.config/sunshine/credentials/cakey.pem
           sudo chmod 600 /root/.config/sunshine/credentials/cakey.pem
           echo "Sunshine pairing state restored"
+
+          echo "Downloading Steam session release asset"
+          curl -fL \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/matthijs12310/machine-dev/releases/assets/${STEAM_SESSION_ASSET_ID}" \
+            -o /tmp/steam-session.tar.gz
+          sudo mv /tmp/steam-session.tar.gz /root/machine-dev/steam-session.tar.gz
+          sudo chmod 600 /root/machine-dev/steam-session.tar.gz
+          echo "Steam session archive restored to /root/machine-dev/steam-session.tar.gz"
 
       - name: Print connection info
         run: |
