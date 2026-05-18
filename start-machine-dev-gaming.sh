@@ -29,6 +29,7 @@ XORG_WAIT_TIMEOUT="${XORG_WAIT_TIMEOUT:-300}"
 SUNSHINE_WAIT_TIMEOUT="${SUNSHINE_WAIT_TIMEOUT:-300}"
 INPUT_WAIT_TIMEOUT="${INPUT_WAIT_TIMEOUT:-600}"
 AUDIO_SINK_WAIT_TIMEOUT="${AUDIO_SINK_WAIT_TIMEOUT:-600}"
+INPUT_PERMISSION_WATCH_SECONDS="${INPUT_PERMISSION_WATCH_SECONDS:-1800}"
 
 LOG_DIR="${LOG_DIR:-/tmp/machine-dev-gaming}"
 
@@ -50,7 +51,13 @@ prepare_common() {
   mkdir -p "$LOG_DIR" /dev/shm "/tmp/runtime-${STEAM_USER}"
   chmod 1777 /tmp /dev/shm || true
 
+  modprobe uinput 2>/dev/null || true
+  if [ ! -e /dev/uinput ]; then
+    mknod /dev/uinput c 10 223 2>/dev/null || true
+  fi
+
   if id "$STEAM_USER" >/dev/null 2>&1; then
+    usermod -aG input "$STEAM_USER" 2>/dev/null || true
     chown "$STEAM_USER:$STEAM_USER" "/tmp/runtime-${STEAM_USER}" || true
   fi
 
@@ -58,6 +65,16 @@ prepare_common() {
   chmod -R a+rw /dev/input /dev/uinput /dev/dri /dev/nvidia* 2>/dev/null || true
 
   mkdir -p "$SUNSHINE_CONFIG_DIR"
+}
+
+start_input_permission_watcher() {
+  (
+    for _ in $(seq 1 "$INPUT_PERMISSION_WATCH_SECONDS"); do
+      chmod -R a+rw /dev/input /dev/uinput 2>/dev/null || true
+      sleep 2
+    done
+  ) >"${LOG_DIR}/input-permissions.log" 2>&1 &
+  echo $! >"${LOG_DIR}/input-permissions.pid"
 }
 
 find_helper() {
@@ -387,6 +404,7 @@ print_status() {
   echo "  Sunshine: ${LOG_DIR}/sunshine-stack.log"
   echo "  Audio:    ${LOG_DIR}/pulseaudio.log"
   echo "  Sink set: ${LOG_DIR}/audio-sink-watch.log"
+  echo "  Devices:  ${LOG_DIR}/input-permissions.log"
   echo "  Input:    ${LOG_DIR}/input-bridge.log"
   echo "  Steam:    ${LOG_DIR}/steam.log"
   echo
@@ -394,6 +412,7 @@ print_status() {
   echo "  tail -f ${LOG_DIR}/sunshine-stack.log"
   echo "  tail -f ${LOG_DIR}/pulseaudio.log"
   echo "  tail -f ${LOG_DIR}/audio-sink-watch.log"
+  echo "  tail -f ${LOG_DIR}/input-permissions.log"
   echo "  tail -f ${LOG_DIR}/input-bridge.log"
   echo "  tail -f ${LOG_DIR}/steam.log"
   echo
@@ -419,6 +438,7 @@ print_status() {
 main() {
   need_root
   prepare_common
+  start_input_permission_watcher
 
   echo "Using script directory: ${script_dir}"
   echo "Using log directory: ${LOG_DIR}"

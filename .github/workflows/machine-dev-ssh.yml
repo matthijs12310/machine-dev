@@ -1,0 +1,163 @@
+name: machine.dev SSH shell
+
+on:
+  workflow_dispatch:
+    inputs:
+      keepalive_minutes:
+        description: "How long to keep the runner alive"
+        required: true
+        default: "120"
+
+permissions:
+  contents: read
+
+jobs:
+  ssh:
+    runs-on:
+      - machine
+      - gpu=l4
+      - cpu=16
+      - regions=eu-south-2
+      - tenancy=spot
+      - disk_size=100
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout machine-dev
+        uses: actions/checkout@v4
+        with:
+          path: machine-dev
+
+      - name: Install and connect Tailscale
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl jq ca-certificates
+
+          token=$(curl -sf -X POST "https://api.tailscale.com/api/v2/oauth/token" \
+            -d "client_id=${OAUTH_CLIENT_ID}&client_secret=${OAUTH_CLIENT_SECRET}&grant_type=client_credentials" \
+            | jq -r '.access_token')
+
+          stale_ids=$(
+            curl -sf -H "Authorization: Bearer ${token}" \
+              "https://api.tailscale.com/api/v2/tailnet/-/devices" \
+            | jq -r '.devices[] | select(.hostname == "machine-dev-l4-eu") | .id'
+          )
+          if [ -z "$stale_ids" ]; then
+            echo "No stale node found, continuing"
+          else
+            echo "$stale_ids" | while read -r id; do
+              echo "Deleting stale node: $id"
+              curl -sf -X DELETE -H "Authorization: Bearer ${token}" \
+                "https://api.tailscale.com/api/v2/device/${id}"
+            done
+            echo "Deleted, waiting for propagation"
+            sleep 5
+          fi
+
+          authkey=$(curl -sf -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            "https://api.tailscale.com/api/v2/tailnet/-/keys" \
+            -d '{
+              "capabilities": {
+                "devices": {
+                  "create": {
+                    "reusable": false,
+                    "ephemeral": true,
+                    "preauthorized": true,
+                    "tags": ["tag:ci"]
+                  }
+                }
+              }
+            }' | jq -r '.key')
+
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscaled --state=/tmp/tailscaled.state >/tmp/tailscaled.log 2>&1 &
+          sleep 3
+
+          sudo tailscale up \
+            --authkey="${authkey}" \
+            --hostname=machine-dev-l4-eu \
+            --advertise-tags=tag:ci \
+            --ssh=false \
+            --accept-routes
+
+      - name: Setup SSH
+        env:
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends openssh-server
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${SSH_PUBLIC_KEY}" > "$HOME/.ssh/authorized_keys"
+          chmod 600 "$HOME/.ssh/authorized_keys"
+
+          sudo mkdir -p /root/.ssh
+          sudo chmod 700 /root/.ssh
+          printf '%s\n' "${SSH_PUBLIC_KEY}" | sudo tee /root/.ssh/authorized_keys >/dev/null
+          sudo chmod 600 /root/.ssh/authorized_keys
+
+          sudo sed -i \
+            -e 's/^#\?PubkeyAuthentication .*/PubkeyAuthentication yes/' \
+            -e 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' \
+            -e 's/^#\?PermitRootLogin .*/PermitRootLogin prohibit-password/' \
+            /etc/ssh/sshd_config
+          sudo mkdir -p /run/sshd
+          sudo systemctl restart ssh || sudo /usr/sbin/sshd
+
+      - name: Install scripts and restore Sunshine pairing state
+        run: |
+          set -euo pipefail
+
+          sudo rm -rf /root/machine-dev
+          sudo mkdir -p /root/machine-dev
+          sudo cp -a machine-dev/. /root/machine-dev/
+          echo "Repo available at /root/machine-dev"
+
+          sudo chmod 755 /root/machine-dev
+          sudo bash -c 'chmod +x /root/machine-dev/*.sh'
+          sudo bash -c 'chmod +x /root/machine-dev/moonlight-input-bridge.py'
+
+          sudo mkdir -p /root/.config/sunshine/credentials
+          sudo cp /root/machine-dev/sunshine/sunshine_state.json \
+            /root/.config/sunshine/sunshine_state.json
+          sudo cp /root/machine-dev/sunshine/cacert.pem \
+            /root/.config/sunshine/credentials/cacert.pem
+          sudo cp /root/machine-dev/sunshine/cakey.pem \
+            /root/.config/sunshine/credentials/cakey.pem
+          sudo chmod 600 /root/.config/sunshine/credentials/cakey.pem
+          echo "Sunshine pairing state restored"
+
+      - name: Print connection info
+        run: |
+          set -euo pipefail
+          ipv4=$(tailscale ip -4 || true)
+          echo ""
+          echo "SSH ready:"
+          echo "  ssh runner@${ipv4}"
+          echo "  ssh root@${ipv4}"
+          echo ""
+          echo "Or by MagicDNS:"
+          echo "  ssh runner@machine-dev-l4-eu"
+          echo "  ssh root@machine-dev-l4-eu"
+          echo ""
+          echo "Scripts:"
+          echo "  cd /root/machine-dev"
+          echo "  ./start-machine-dev-gaming.sh"
+          echo ""
+          nvidia-smi || true
+
+      - name: Keep SSH alive
+        run: |
+          set -euo pipefail
+          minutes='${{ github.event.inputs.keepalive_minutes }}'
+          case "$minutes" in ''|*[!0-9]*) minutes=120 ;; esac
+          [ "$minutes" -gt 350 ] && minutes=350
+          echo "Keeping alive for ${minutes} minutes"
+          sleep "$((minutes * 60))"

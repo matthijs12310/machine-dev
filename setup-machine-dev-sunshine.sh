@@ -15,6 +15,7 @@ SUNSHINE_PASS="${SUNSHINE_PASS:-changeme123}"
 SUNSHINE_CONFIG_DIR="${SUNSHINE_CONFIG_DIR:-/root/.config/sunshine}"
 SUNSHINE_CONF="${SUNSHINE_CONFIG_DIR}/sunshine.conf"
 LOG_DIR="${LOG_DIR:-/tmp/machine-dev-sunshine}"
+INPUT_PERMISSION_WATCH_SECONDS="${INPUT_PERMISSION_WATCH_SECONDS:-1800}"
 
 display_num="${DISPLAY#:}"
 display_num="${display_num%%.*}"
@@ -148,6 +149,13 @@ start_xorg() {
   pkill -9 Xorg openbox 2>/dev/null || true
   rm -f "/tmp/.X${display_num}-lock" "/tmp/.X11-unix/X${display_num}"
 
+  modprobe uinput 2>/dev/null || true
+  if [ ! -e /dev/uinput ]; then
+    mknod /dev/uinput c 10 223 2>/dev/null || true
+  fi
+  if id "$STEAM_USER" >/dev/null 2>&1; then
+    usermod -aG input "$STEAM_USER" 2>/dev/null || true
+  fi
   chmod -R a+rw /dev/uinput /dev/input /dev/dri /dev/nvidia* 2>/dev/null || true
 
   Xorg "$DISPLAY" \
@@ -179,6 +187,15 @@ start_xorg() {
     DISPLAY="$DISPLAY" xrandr --output "$output_name" --mode "${WIDTH}x${HEIGHT}" --pos 0x0 --primary 2>/dev/null || true
   fi
   DISPLAY="$DISPLAY" xrandr --fb "${WIDTH}x${HEIGHT}" 2>/dev/null || true
+}
+
+start_input_permission_watcher() {
+  (
+    for _ in $(seq 1 "$INPUT_PERMISSION_WATCH_SECONDS"); do
+      chmod -R a+rw /dev/input /dev/uinput 2>/dev/null || true
+      sleep 2
+    done
+  ) >"${LOG_DIR}/input-permissions.log" 2>&1 &
 }
 
 write_sunshine_config() {
@@ -242,6 +259,7 @@ main() {
   install_sunshine
   write_xorg_config
   start_xorg
+  start_input_permission_watcher
   write_sunshine_config
   print_status
 

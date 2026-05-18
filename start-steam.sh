@@ -2,6 +2,7 @@
 set -euo pipefail
 
 export DISPLAY="${DISPLAY:-:99}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 default_steam_user="mc"
 if id runner >/dev/null 2>&1; then
@@ -14,6 +15,9 @@ runtime_dir="${XDG_RUNTIME_DIR:-/tmp/runtime-${steam_user}}"
 xdg_config_home="${steam_home}/.config"
 xdg_cache_home="${steam_home}/.cache"
 pulse_server="${PULSE_SERVER:-unix:${runtime_dir}/pulse/native}"
+steam_session_archive="${STEAM_SESSION_ARCHIVE:-}"
+steam_session_url="${STEAM_SESSION_URL:-}"
+steam_restore_force="${STEAM_RESTORE_FORCE:-0}"
 
 need_root_for_install() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -40,6 +44,7 @@ install_steam_installer() {
 
   apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     steam-installer
 
   if ! command -v steam >/dev/null 2>&1; then
@@ -51,11 +56,17 @@ install_steam_installer() {
 }
 
 prepare_user_and_runtime() {
+  modprobe uinput 2>/dev/null || true
+  if [ ! -e /dev/uinput ]; then
+    mknod /dev/uinput c 10 223 2>/dev/null || true
+  fi
+
   if [ "$(id -u)" -eq 0 ]; then
     if ! id "$steam_user" >/dev/null 2>&1; then
       echo "Creating user: ${steam_user}"
       useradd -m -s /bin/bash "$steam_user"
     fi
+    usermod -aG input "$steam_user" 2>/dev/null || true
 
     mkdir -p "$runtime_dir" /dev/shm "$steam_home" "$xdg_config_home" "$xdg_cache_home"
     chown -R "$steam_user:$steam_user" "$runtime_dir" "$steam_home" "$xdg_config_home" "$xdg_cache_home" || true
@@ -66,10 +77,98 @@ prepare_user_and_runtime() {
   fi
 
   chmod 1777 /dev/shm /tmp || true
+  chmod -R a+rw /dev/input /dev/uinput 2>/dev/null || true
   rm -f /dev/shm/Steam* /dev/shm/steam* /dev/shm/.org.chromium.* /tmp/.org.chromium.* 2>/dev/null || true
 
   if command -v xhost >/dev/null 2>&1; then
     DISPLAY="$DISPLAY" xhost "+SI:localuser:${steam_user}" >/dev/null 2>&1 || true
+  fi
+}
+
+steam_session_exists() {
+  [ -f "${steam_home}/.steam/debian-installation/config/loginusers.vdf" ] \
+    || [ -f "${steam_home}/.steam/steam/config/loginusers.vdf" ] \
+    || [ -f "${steam_home}/.steam/root/config/loginusers.vdf" ] \
+    || [ -f "${steam_home}/.local/share/Steam/config/loginusers.vdf" ]
+}
+
+find_steam_session_archive() {
+  local candidate
+
+  if [ -n "$steam_session_archive" ] && [ -f "$steam_session_archive" ]; then
+    echo "$steam_session_archive"
+    return 0
+  fi
+
+  for candidate in \
+    "${script_dir}/steam-session.tar.gz" \
+    "${script_dir}/steam-session.tgz" \
+    "${script_dir}/steam-session.tar.zst" \
+    "${script_dir}/steam-profile.tar.gz" \
+    "${script_dir}/steam-profile.tgz" \
+    "${script_dir}/steam-profile.tar.zst"
+  do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+download_steam_session_archive() {
+  local target="/tmp/steam-session-restore.tar.gz"
+
+  [ -n "$steam_session_url" ] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+
+  case "$steam_session_url" in
+    *.tar.zst|*.zst) target="/tmp/steam-session-restore.tar.zst" ;;
+    *.tgz) target="/tmp/steam-session-restore.tgz" ;;
+  esac
+
+  echo "Downloading Steam session archive from STEAM_SESSION_URL" >&2
+  curl -fL "$steam_session_url" -o "$target"
+  echo "$target"
+}
+
+restore_steam_session_if_available() {
+  local archive=""
+
+  if [ "$steam_restore_force" != "1" ] && steam_session_exists; then
+    echo "Steam session already exists for ${steam_user}; restore skipped."
+    return 0
+  fi
+
+  if archive="$(find_steam_session_archive 2>/dev/null)"; then
+    :
+  elif archive="$(download_steam_session_archive 2>/dev/null)"; then
+    :
+  else
+    echo "No Steam session archive found; first Steam login may still be required."
+    return 0
+  fi
+
+  echo "Restoring Steam session from: ${archive}"
+  mkdir -p "$steam_home"
+
+  case "$archive" in
+    *.tar.zst|*.zst)
+      if command -v zstd >/dev/null 2>&1; then
+        tar --zstd -xf "$archive" -C "$steam_home"
+      else
+        echo "WARNING: ${archive} needs zstd, but zstd is not installed. Restore skipped."
+        return 0
+      fi
+      ;;
+    *)
+      tar -xzf "$archive" -C "$steam_home"
+      ;;
+  esac
+
+  if [ "$(id -u)" -eq 0 ]; then
+    chown -R "$steam_user:$steam_user" "${steam_home}/.steam" "${steam_home}/.local" 2>/dev/null || true
   fi
 }
 
@@ -118,6 +217,7 @@ start_steam_current_user() {
 main() {
   install_steam_installer
   prepare_user_and_runtime
+  restore_steam_session_if_available
 
   if [ "$(id -u)" -eq 0 ]; then
     start_steam_as_user
