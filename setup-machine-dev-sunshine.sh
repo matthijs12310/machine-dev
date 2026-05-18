@@ -203,7 +203,7 @@ external_ip = ${tsip}
 EOF
   fi
 
-  sunshine --creds "$SUNSHINE_USER" "$SUNSHINE_PASS" >/dev/null 2>&1 || true
+  HOME="/root" sunshine --creds "$SUNSHINE_USER" "$SUNSHINE_PASS" >/dev/null 2>&1 || true
 }
 
 print_status() {
@@ -238,7 +238,7 @@ main() {
   echo "Starting Sunshine in foreground. Leave this process running."
   echo "After Moonlight connects, run in another SSH shell:"
   echo "  DISPLAY=${DISPLAY} ${script_dir}/start-input-bridge.sh"
-  exec env DISPLAY="$DISPLAY" sunshine "$SUNSHINE_CONF"
+  exec env DISPLAY="$DISPLAY" HOME="/root" sunshine "$SUNSHINE_CONF"
 }
 
 main "$@"
