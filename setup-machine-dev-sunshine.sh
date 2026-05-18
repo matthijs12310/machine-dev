@@ -187,6 +187,8 @@ write_sunshine_config() {
   fi
 
   mkdir -p "$SUNSHINE_CONFIG_DIR"
+  mkdir -p "${SUNSHINE_CONFIG_DIR}/credentials"
+
   cat >"$SUNSHINE_CONF" <<EOF
 origin_web_ui_allowed = wan
 csrf_allowed_origins = ${origins}
@@ -195,6 +197,11 @@ resolutions = [${WIDTH}x${HEIGHT}]
 fps = [60]
 adapter_name = ${DISPLAY}
 output_name = 0
+
+file_state = ${SUNSHINE_CONFIG_DIR}/sunshine_state.json
+credentials_file = ${SUNSHINE_CONFIG_DIR}/credentials/sunshine_credentials.json
+pkey = ${SUNSHINE_CONFIG_DIR}/credentials/cakey.pem
+cert = ${SUNSHINE_CONFIG_DIR}/credentials/cacert.pem
 EOF
 
   if [ -n "$tsip" ]; then
