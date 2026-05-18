@@ -32,48 +32,78 @@ jobs:
         env:
           OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
           OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends curl jq ca-certificates
 
-          token=$(curl -sf -X POST "https://api.tailscale.com/api/v2/oauth/token" \
-            -d "client_id=${OAUTH_CLIENT_ID}&client_secret=${OAUTH_CLIENT_SECRET}&grant_type=client_credentials" \
-            | jq -r '.access_token')
+          api_request() {
+            local method="$1"
+            local url="$2"
+            local output="$3"
+            shift 3
 
-          stale_ids=$(
-            curl -sf -H "Authorization: Bearer ${token}" \
-              "https://api.tailscale.com/api/v2/tailnet/-/devices" \
-            | jq -r '.devices[] | select(.hostname == "machine-dev-l4-eu") | .id'
-          )
-          if [ -z "$stale_ids" ]; then
-            echo "No stale node found, continuing"
+            local code
+            code=$(curl -sS -X "$method" -w '%{http_code}' -o "$output" "$@" "$url")
+            if [ "$code" -lt 200 ] || [ "$code" -gt 299 ]; then
+              echo "Tailscale API request failed: ${method} ${url}"
+              echo "HTTP status: ${code}"
+              echo "Response body:"
+              cat "$output"
+              echo
+              exit 1
+            fi
+          }
+
+          if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
+            echo "Using existing TAILSCALE_AUTHKEY secret"
+            authkey="${TAILSCALE_AUTHKEY}"
           else
-            echo "$stale_ids" | while read -r id; do
-              echo "Deleting stale node: $id"
-              curl -sf -X DELETE -H "Authorization: Bearer ${token}" \
-                "https://api.tailscale.com/api/v2/device/${id}"
-            done
-            echo "Deleted, waiting for propagation"
-            sleep 5
-          fi
+            if [ -z "${OAUTH_CLIENT_ID:-}" ] || [ -z "${OAUTH_CLIENT_SECRET:-}" ]; then
+              echo "Missing Tailscale auth. Set either TAILSCALE_AUTHKEY or both OAUTH_CLIENT_ID/OAUTH_CLIENT_SECRET."
+              exit 1
+            fi
 
-          authkey=$(curl -sf -X POST \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" \
-            "https://api.tailscale.com/api/v2/tailnet/-/keys" \
-            -d '{
-              "capabilities": {
-                "devices": {
-                  "create": {
-                    "reusable": false,
-                    "ephemeral": true,
-                    "preauthorized": true,
-                    "tags": ["tag:ci"]
+            api_request POST "https://api.tailscale.com/api/v2/oauth/token" /tmp/ts-token.json \
+              -d "client_id=${OAUTH_CLIENT_ID}&client_secret=${OAUTH_CLIENT_SECRET}&grant_type=client_credentials"
+
+            token=$(jq -er '.access_token' /tmp/ts-token.json)
+
+            api_request GET "https://api.tailscale.com/api/v2/tailnet/-/devices" /tmp/ts-devices.json \
+              -H "Authorization: Bearer ${token}"
+
+            stale_ids=$(jq -r '.devices[] | select(.hostname == "machine-dev-l4-eu") | .id' /tmp/ts-devices.json)
+            if [ -z "$stale_ids" ]; then
+              echo "No stale node found, continuing"
+            else
+              echo "$stale_ids" | while read -r id; do
+                echo "Deleting stale node: $id"
+                api_request DELETE "https://api.tailscale.com/api/v2/device/${id}" /tmp/ts-delete.json \
+                  -H "Authorization: Bearer ${token}"
+              done
+              echo "Deleted, waiting for propagation"
+              sleep 5
+            fi
+
+            api_request POST "https://api.tailscale.com/api/v2/tailnet/-/keys" /tmp/ts-key.json \
+              -H "Authorization: Bearer ${token}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "capabilities": {
+                  "devices": {
+                    "create": {
+                      "reusable": false,
+                      "ephemeral": true,
+                      "preauthorized": true,
+                      "tags": ["tag:ci"]
+                    }
                   }
                 }
-              }
-            }' | jq -r '.key')
+              }'
+
+            authkey=$(jq -er '.key' /tmp/ts-key.json)
+          fi
 
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo tailscaled --state=/tmp/tailscaled.state >/tmp/tailscaled.log 2>&1 &
