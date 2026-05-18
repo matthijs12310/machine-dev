@@ -25,6 +25,9 @@ if [ "$(id -u)" -eq 0 ]; then
   chown -R "$audio_user:$audio_user" "$runtime_dir" "${audio_home}/.config" "${audio_home}/.cache"
   chmod 700 "$runtime_dir" "${audio_home}/.config/pulse"
 
+  runner_script="/tmp/start-pulseaudio-${audio_user}.sh"
+  install -m 755 "$0" "$runner_script"
+
   exec runuser -u "$audio_user" -- env \
     HOME="$audio_home" \
     USER="$audio_user" \
@@ -33,7 +36,7 @@ if [ "$(id -u)" -eq 0 ]; then
     XDG_CACHE_HOME="${audio_home}/.cache" \
     XDG_RUNTIME_DIR="$runtime_dir" \
     DBUS_SESSION_BUS_ADDRESS= \
-    bash "$0"
+    bash "$runner_script"
 fi
 
 export HOME="$audio_home"
