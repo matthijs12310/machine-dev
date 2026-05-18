@@ -28,7 +28,8 @@ if [ "$(id -u)" -eq 0 ]; then
   runner_script="/tmp/start-pulseaudio-${audio_user}.sh"
   install -m 755 "$0" "$runner_script"
 
-  exec runuser -u "$audio_user" -- env \
+  exec runuser -u "$audio_user" -- env -i \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     HOME="$audio_home" \
     USER="$audio_user" \
     LOGNAME="$audio_user" \
@@ -43,7 +44,7 @@ export HOME="$audio_home"
 export XDG_CONFIG_HOME="${audio_home}/.config"
 export XDG_CACHE_HOME="${audio_home}/.cache"
 export XDG_RUNTIME_DIR="$runtime_dir"
-unset PULSE_RUNTIME_PATH PULSE_CONFIG_PATH PULSE_STATE_PATH PULSE_CLIENTCONFIG
+unset PULSE_SERVER PULSE_RUNTIME_PATH PULSE_CONFIG_PATH PULSE_STATE_PATH PULSE_CLIENTCONFIG
 
 mkdir -p "$XDG_CONFIG_HOME/pulse" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_CONFIG_HOME/pulse" "$XDG_RUNTIME_DIR"

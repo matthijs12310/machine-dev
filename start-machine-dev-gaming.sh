@@ -28,6 +28,7 @@ WAIT_FOR_MOONLIGHT="${WAIT_FOR_MOONLIGHT:-0}"
 XORG_WAIT_TIMEOUT="${XORG_WAIT_TIMEOUT:-300}"
 SUNSHINE_WAIT_TIMEOUT="${SUNSHINE_WAIT_TIMEOUT:-300}"
 INPUT_WAIT_TIMEOUT="${INPUT_WAIT_TIMEOUT:-600}"
+AUDIO_SINK_WAIT_TIMEOUT="${AUDIO_SINK_WAIT_TIMEOUT:-600}"
 
 LOG_DIR="${LOG_DIR:-/tmp/machine-dev-gaming}"
 
@@ -250,7 +251,8 @@ start_sunshine_stack() {
 
   wait_for_xorg
   wait_for_sunshine
-  set_sunshine_default_sink
+  set_sunshine_default_sink >"${LOG_DIR}/audio-sink-watch.log" 2>&1 &
+  echo $! >"${LOG_DIR}/audio-sink-watch.pid"
 }
 
 start_audio() {
@@ -273,7 +275,7 @@ set_sunshine_default_sink() {
     return 0
   fi
 
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 "$AUDIO_SINK_WAIT_TIMEOUT"); do
     if runuser -u "$STEAM_USER" -- env \
       HOME="/home/${STEAM_USER}" \
       XDG_CONFIG_HOME="/home/${STEAM_USER}/.config" \
@@ -292,7 +294,7 @@ set_sunshine_default_sink() {
     sleep 1
   done
 
-  echo "WARNING: sink-sunshine-stereo did not appear yet; audio may need a Moonlight reconnect."
+  echo "WARNING: sink-sunshine-stereo did not appear within ${AUDIO_SINK_WAIT_TIMEOUT}s."
   return 0
 }
 
@@ -384,12 +386,14 @@ print_status() {
   echo "Logs:"
   echo "  Sunshine: ${LOG_DIR}/sunshine-stack.log"
   echo "  Audio:    ${LOG_DIR}/pulseaudio.log"
+  echo "  Sink set: ${LOG_DIR}/audio-sink-watch.log"
   echo "  Input:    ${LOG_DIR}/input-bridge.log"
   echo "  Steam:    ${LOG_DIR}/steam.log"
   echo
   echo "Useful commands:"
   echo "  tail -f ${LOG_DIR}/sunshine-stack.log"
   echo "  tail -f ${LOG_DIR}/pulseaudio.log"
+  echo "  tail -f ${LOG_DIR}/audio-sink-watch.log"
   echo "  tail -f ${LOG_DIR}/input-bridge.log"
   echo "  tail -f ${LOG_DIR}/steam.log"
   echo

@@ -87,7 +87,7 @@ start_steam_as_user() {
     HOME="$steam_home" \
     USER="$steam_user" \
     LOGNAME="$steam_user" \
-    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     GTK_A11Y=none \
@@ -100,6 +100,7 @@ start_steam_current_user() {
   export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$xdg_config_home}"
   export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$xdg_cache_home}"
   export PULSE_SERVER="${PULSE_SERVER:-$pulse_server}"
+  export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:${PATH:-}"
   export HOME="${HOME:-$steam_home}"
   export USER="${USER:-$steam_user}"
   export LOGNAME="${LOGNAME:-$steam_user}"
