@@ -11,6 +11,9 @@ fi
 steam_user="${STEAM_USER:-$default_steam_user}"
 steam_home="/home/${steam_user}"
 runtime_dir="${XDG_RUNTIME_DIR:-/tmp/runtime-${steam_user}}"
+xdg_config_home="${steam_home}/.config"
+xdg_cache_home="${steam_home}/.cache"
+pulse_server="${PULSE_SERVER:-unix:${runtime_dir}/pulse/native}"
 
 need_root_for_install() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -54,11 +57,11 @@ prepare_user_and_runtime() {
       useradd -m -s /bin/bash "$steam_user"
     fi
 
-    mkdir -p "$runtime_dir" /dev/shm "$steam_home"
-    chown "$steam_user:$steam_user" "$runtime_dir" "$steam_home" || true
+    mkdir -p "$runtime_dir" /dev/shm "$steam_home" "$xdg_config_home" "$xdg_cache_home"
+    chown -R "$steam_user:$steam_user" "$runtime_dir" "$steam_home" "$xdg_config_home" "$xdg_cache_home" || true
     chmod 700 "$runtime_dir" || true
   else
-    mkdir -p "$runtime_dir" /dev/shm
+    mkdir -p "$runtime_dir" "$xdg_config_home" "$xdg_cache_home" /dev/shm
     chmod 700 "$runtime_dir" || true
   fi
 
@@ -77,7 +80,10 @@ start_steam_as_user() {
   exec runuser -u "$steam_user" -- env \
     DISPLAY="$DISPLAY" \
     XDG_RUNTIME_DIR="$runtime_dir" \
+    XDG_CONFIG_HOME="$xdg_config_home" \
+    XDG_CACHE_HOME="$xdg_cache_home" \
     DBUS_SESSION_BUS_ADDRESS= \
+    PULSE_SERVER="$pulse_server" \
     HOME="$steam_home" \
     USER="$steam_user" \
     LOGNAME="$steam_user" \
@@ -91,6 +97,9 @@ start_steam_as_user() {
 
 start_steam_current_user() {
   export XDG_RUNTIME_DIR="$runtime_dir"
+  export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$xdg_config_home}"
+  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$xdg_cache_home}"
+  export PULSE_SERVER="${PULSE_SERVER:-$pulse_server}"
   export HOME="${HOME:-$steam_home}"
   export USER="${USER:-$steam_user}"
   export LOGNAME="${LOGNAME:-$steam_user}"

@@ -7,6 +7,9 @@ DISPLAY="${DISPLAY:-:99}"
 WIDTH="${GAME_WIDTH:-1920}"
 HEIGHT="${GAME_HEIGHT:-1080}"
 DEPTH="${GAME_DEPTH:-24}"
+STEAM_USER="${STEAM_USER:-runner}"
+AUDIO_RUNTIME_DIR="${AUDIO_RUNTIME_DIR:-/tmp/runtime-${STEAM_USER}}"
+PULSE_SERVER="${PULSE_SERVER:-unix:${AUDIO_RUNTIME_DIR}/pulse/native}"
 SUNSHINE_USER="${SUNSHINE_USER:-admin}"
 SUNSHINE_PASS="${SUNSHINE_PASS:-changeme123}"
 SUNSHINE_CONFIG_DIR="${SUNSHINE_CONFIG_DIR:-/root/.config/sunshine}"
@@ -193,6 +196,7 @@ write_sunshine_config() {
 origin_web_ui_allowed = wan
 csrf_allowed_origins = ${origins}
 capture = nvfbc
+audio_sink = sink-sunshine-stereo
 resolutions = [${WIDTH}x${HEIGHT}]
 fps = [60]
 adapter_name = ${DISPLAY}
@@ -245,7 +249,12 @@ main() {
   echo "Starting Sunshine in foreground. Leave this process running."
   echo "After Moonlight connects, run in another SSH shell:"
   echo "  DISPLAY=${DISPLAY} ${script_dir}/start-input-bridge.sh"
-  exec env DISPLAY="$DISPLAY" HOME="/root" sunshine "$SUNSHINE_CONF"
+  exec env \
+    DISPLAY="$DISPLAY" \
+    HOME="/root" \
+    XDG_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+    PULSE_SERVER="$PULSE_SERVER" \
+    sunshine "$SUNSHINE_CONF"
 }
 
 main "$@"

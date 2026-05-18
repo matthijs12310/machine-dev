@@ -12,10 +12,13 @@ export STEAM_USER="${STEAM_USER:-runner}"
 export STEAM_RUNTIME="${STEAM_RUNTIME:-1}"
 export STEAM_LD_LIBRARY_PATH="${STEAM_LD_LIBRARY_PATH:-/usr/lib32:/usr/lib/x86_64-linux-gnu}"
 export STEAM_ARGS="${STEAM_ARGS:--cef-disable-gpu -cef-disable-gpu-compositing -cef-disable-dev-shm-usage -no-cef-sandbox}"
+export AUDIO_RUNTIME_DIR="${AUDIO_RUNTIME_DIR:-/tmp/runtime-${STEAM_USER}}"
+export PULSE_SERVER="${PULSE_SERVER:-unix:${AUDIO_RUNTIME_DIR}/pulse/native}"
 
 export SUNSHINE_CONFIG_DIR="${SUNSHINE_CONFIG_DIR:-/root/.config/sunshine}"
 
 START_SUNSHINE="${START_SUNSHINE:-1}"
+START_AUDIO="${START_AUDIO:-1}"
 START_INPUT="${START_INPUT:-1}"
 START_STEAM="${START_STEAM:-1}"
 VERIFY_GPU="${VERIFY_GPU:-1}"
@@ -235,6 +238,9 @@ start_sunshine_stack() {
     GAME_WIDTH="$GAME_WIDTH" \
     GAME_HEIGHT="$GAME_HEIGHT" \
     GAME_DEPTH="$GAME_DEPTH" \
+    STEAM_USER="$STEAM_USER" \
+    AUDIO_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+    PULSE_SERVER="$PULSE_SERVER" \
     SUNSHINE_CONFIG_DIR="$SUNSHINE_CONFIG_DIR" \
     LOG_DIR=/tmp/machine-dev-sunshine \
     "$sunshine_setup" \
@@ -244,6 +250,50 @@ start_sunshine_stack() {
 
   wait_for_xorg
   wait_for_sunshine
+  set_sunshine_default_sink
+}
+
+start_audio() {
+  local audio_start
+
+  if ! audio_start="$(find_helper start-pulseaudio.sh)"; then
+    echo "WARNING: start-pulseaudio.sh not found; audio setup skipped."
+    return 0
+  fi
+
+  echo "Starting PulseAudio using: ${audio_start}"
+  "$audio_start" >"${LOG_DIR}/pulseaudio.log" 2>&1 || {
+    echo "WARNING: PulseAudio setup failed. See ${LOG_DIR}/pulseaudio.log"
+    return 0
+  }
+}
+
+set_sunshine_default_sink() {
+  if [ "$START_AUDIO" = "0" ] || ! id "$STEAM_USER" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for _ in $(seq 1 60); do
+    if runuser -u "$STEAM_USER" -- env \
+      HOME="/home/${STEAM_USER}" \
+      XDG_CONFIG_HOME="/home/${STEAM_USER}/.config" \
+      XDG_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+      PULSE_SERVER="$PULSE_SERVER" \
+      pactl list short sinks 2>/dev/null | grep -q 'sink-sunshine-stereo'; then
+      runuser -u "$STEAM_USER" -- env \
+        HOME="/home/${STEAM_USER}" \
+        XDG_CONFIG_HOME="/home/${STEAM_USER}/.config" \
+        XDG_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+        PULSE_SERVER="$PULSE_SERVER" \
+        pactl set-default-sink sink-sunshine-stereo >/dev/null 2>&1 || true
+      echo "Default PulseAudio sink: sink-sunshine-stereo"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "WARNING: sink-sunshine-stereo did not appear yet; audio may need a Moonlight reconnect."
+  return 0
 }
 
 start_input_bridge() {
@@ -304,6 +354,8 @@ start_steam() {
     STEAM_USER="$STEAM_USER" \
     STEAM_RUNTIME="$STEAM_RUNTIME" \
     STEAM_LD_LIBRARY_PATH="$STEAM_LD_LIBRARY_PATH" \
+    XDG_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+    PULSE_SERVER="$PULSE_SERVER" \
     STEAM_ARGS="$STEAM_ARGS" \
     "$steam_start" \
     >"${LOG_DIR}/steam.log" 2>&1 &
@@ -331,11 +383,13 @@ print_status() {
   echo
   echo "Logs:"
   echo "  Sunshine: ${LOG_DIR}/sunshine-stack.log"
+  echo "  Audio:    ${LOG_DIR}/pulseaudio.log"
   echo "  Input:    ${LOG_DIR}/input-bridge.log"
   echo "  Steam:    ${LOG_DIR}/steam.log"
   echo
   echo "Useful commands:"
   echo "  tail -f ${LOG_DIR}/sunshine-stack.log"
+  echo "  tail -f ${LOG_DIR}/pulseaudio.log"
   echo "  tail -f ${LOG_DIR}/input-bridge.log"
   echo "  tail -f ${LOG_DIR}/steam.log"
   echo
@@ -368,6 +422,9 @@ main() {
   echo
 
   if [ "$START_SUNSHINE" != "0" ]; then
+    if [ "$START_AUDIO" != "0" ]; then
+      start_audio
+    fi
     start_sunshine_stack
   else
     wait_for_xorg
