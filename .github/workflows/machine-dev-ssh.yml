@@ -7,6 +7,10 @@ on:
         description: "How long to keep the runner alive"
         required: true
         default: "120"
+      auto_start_gaming:
+        description: "Automatically start Xorg, Sunshine, audio, input bridge, and Steam"
+        required: true
+        default: "true"
 
 permissions:
   contents: read
@@ -155,7 +159,7 @@ jobs:
 
           sudo chmod 755 /root/machine-dev
           sudo bash -c 'chmod +x /root/machine-dev/*.sh'
-          sudo bash -c 'chmod +x /root/machine-dev/moonlight-input-bridge.py'
+          sudo bash -c 'chmod +x /root/machine-dev/*.py'
 
           sudo mkdir -p /root/.config/sunshine/credentials
           sudo cp /root/machine-dev/sunshine/sunshine_state.json \
@@ -177,6 +181,28 @@ jobs:
           sudo chmod 600 /root/machine-dev/steam-session.tar.gz
           echo "Steam session archive restored to /root/machine-dev/steam-session.tar.gz"
 
+      - name: Start gaming stack
+        if: ${{ github.event.inputs.auto_start_gaming != 'false' }}
+        run: |
+          set -euo pipefail
+
+          sudo mkdir -p /tmp/machine-dev-gaming
+          cd /root/machine-dev
+
+          echo "Starting Machine.dev gaming stack automatically"
+          sudo env \
+            DISPLAY=:99 \
+            STEAM_USER=runner \
+            START_SUNSHINE=1 \
+            START_AUDIO=1 \
+            START_INPUT=1 \
+            START_STEAM=1 \
+            VERIFY_GPU=1 \
+            WAIT_FOR_MOONLIGHT=0 \
+            PULSE_SOCKET=/tmp/pulse-native \
+            PULSE_SERVER=unix:/tmp/pulse-native \
+            ./start-machine-dev-gaming.sh 2>&1 | sudo tee /tmp/machine-dev-gaming/launch.log
+
       - name: Print connection info
         run: |
           set -euo pipefail
@@ -193,6 +219,13 @@ jobs:
           echo "Scripts:"
           echo "  cd /root/machine-dev"
           echo "  ./start-machine-dev-gaming.sh"
+          echo ""
+          echo "Gaming stack logs:"
+          echo "  tail -f /tmp/machine-dev-gaming/launch.log"
+          echo "  tail -f /tmp/machine-dev-gaming/sunshine-stack.log"
+          echo "  tail -f /tmp/machine-dev-gaming/pulseaudio.log"
+          echo "  tail -f /tmp/machine-dev-gaming/input-bridge.log"
+          echo "  tail -f /tmp/machine-dev-gaming/steam.log"
           echo ""
           nvidia-smi || true
 
