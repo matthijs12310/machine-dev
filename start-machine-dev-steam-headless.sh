@@ -8,12 +8,21 @@ LOG_DIR="${LOG_DIR:-/tmp/machine-dev-steam-headless}"
 
 IMAGE="${STEAM_HEADLESS_IMAGE:-josh5/steam-headless:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-SteamHeadless}"
-DISPLAY="${DISPLAY:-:55}"
+
+# hybrid is the Machine.dev/AWS L4 path that works with Proton/DXVK:
+# host Xorg provides Vulkan presentation, Steam Headless runs in secondary mode,
+# and XFCE/Steam/Sunshine are started manually inside the container on host Xorg.
+STEAM_HEADLESS_MODE="${STEAM_HEADLESS_MODE:-hybrid}" # hybrid or primary
+HOST_DISPLAY="${HOST_DISPLAY:-:99}"
+CONTAINER_DISPLAY="${CONTAINER_DISPLAY:-:55}"
+DISPLAY="${DISPLAY:-$HOST_DISPLAY}"
+
 DISPLAY_SIZEW="${DISPLAY_SIZEW:-1920}"
 DISPLAY_SIZEH="${DISPLAY_SIZEH:-1080}"
-DISPLAY_REFRESH="${DISPLAY_REFRESH:-144}"
+DISPLAY_REFRESH="${DISPLAY_REFRESH:-120}"
 DISPLAY_CDEPTH="${DISPLAY_CDEPTH:-24}"
 DISPLAY_VIDEO_PORT="${DISPLAY_VIDEO_PORT:-DFP}"
+FORCE_X11_DUMMY_CONFIG="${FORCE_X11_DUMMY_CONFIG:-true}"
 
 TZ="${TZ:-Europe/Amsterdam}"
 PUID="${PUID:-1000}"
@@ -30,12 +39,33 @@ PULL_IMAGE="${PULL_IMAGE:-0}"
 CLEAN_DRIVER_CACHE="${CLEAN_DRIVER_CACHE:-1}"
 SHOW_LOGS="${SHOW_LOGS:-1}"
 FOLLOW_LOGS="${FOLLOW_LOGS:-0}"
+PATCH_UDEV_XORG_RESTART_LOOP="${PATCH_UDEV_XORG_RESTART_LOOP:-1}"
+RESTORE_STEAM_SESSION="${RESTORE_STEAM_SESSION:-1}"
+STEAM_SESSION_ARCHIVE="${STEAM_SESSION_ARCHIVE:-/root/machine-dev/steam-session.tar.gz}"
+
+START_HOST_XORG="${START_HOST_XORG:-1}"
+START_CONTAINER_XFCE="${START_CONTAINER_XFCE:-1}"
+START_CONTAINER_SUNSHINE="${START_CONTAINER_SUNSHINE:-1}"
+START_CONTAINER_STEAM="${START_CONTAINER_STEAM:-1}"
+VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
+ENABLE_DEBUG_VNC="${ENABLE_DEBUG_VNC:-0}"
+HOST_VNC_PORT="${HOST_VNC_PORT:-5901}"
+HOST_XORG_CONFIG="${HOST_XORG_CONFIG:-/etc/X11/xorg-host-vulkan.conf}"
+HOST_XORG_LOG="${HOST_XORG_LOG:-${LOG_DIR}/host-xorg-99.log}"
+HOST_XORG_BUS_ID="${HOST_XORG_BUS_ID:-}"
+HOST_XORG_CONNECTED_MONITOR="${HOST_XORG_CONNECTED_MONITOR:-DFP-0}"
+HOST_XORG_OUTPUT="${HOST_XORG_OUTPUT:-}"
+PULSE_SERVER_PATH="${PULSE_SERVER_PATH:-/tmp/.X11-unix/run/pulse/native}"
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
     echo "Run as root: sudo $0"
     exit 1
   fi
+}
+
+is_hybrid() {
+  [ "$STEAM_HEADLESS_MODE" = "hybrid" ]
 }
 
 tailscale_ip() {
@@ -51,6 +81,16 @@ install_basics() {
   apt-get update
   apt-get install -y --no-install-recommends \
     ca-certificates curl git docker.io docker-compose-plugin
+
+  if is_hybrid; then
+    apt-get install -y --no-install-recommends \
+      dbus-x11 pulseaudio-utils vulkan-tools x11-utils x11-xserver-utils \
+      xinit xserver-xorg-core xserver-xorg-input-evdev xserver-xorg-input-libinput
+
+    if [ "$ENABLE_DEBUG_VNC" = "1" ]; then
+      apt-get install -y --no-install-recommends x11vnc
+    fi
+  fi
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl start docker 2>/dev/null || true
@@ -71,6 +111,7 @@ stop_existing_stacks() {
   pkill sunshine 2>/dev/null || true
   pkill Xorg 2>/dev/null || true
   pkill openbox 2>/dev/null || true
+  pkill x11vnc 2>/dev/null || true
   pkill -u runner -f 'steam|steamwebhelper|wine|gamescope|pressure-vessel|srt-logger|zenity' 2>/dev/null || true
 }
 
@@ -104,6 +145,27 @@ detect_nvidia_version() {
   fi
 
   echo "$version"
+}
+
+detect_nvidia_xorg_bus_id() {
+  if [ -n "$HOST_XORG_BUS_ID" ]; then
+    echo "$HOST_XORG_BUS_ID"
+    return 0
+  fi
+
+  local pci=""
+  pci="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+  if [ -n "$pci" ]; then
+    local bus_hex dev_func dev_hex func_hex
+    bus_hex="$(printf '%s\n' "$pci" | awk -F: '{print $2}')"
+    dev_func="$(printf '%s\n' "$pci" | awk -F: '{print $3}')"
+    dev_hex="${dev_func%%.*}"
+    func_hex="${dev_func##*.}"
+    echo "PCI:$((16#$bus_hex)):$((16#$dev_hex)):$((16#$func_hex))"
+    return 0
+  fi
+
+  echo "PCI:53:0:0"
 }
 
 download_nvidia_driver() {
@@ -147,9 +209,35 @@ download_nvidia_driver() {
   exit 1
 }
 
+restore_steam_session() {
+  [ "$RESTORE_STEAM_SESSION" = "1" ] || return 0
+  [ -f "$STEAM_SESSION_ARCHIVE" ] || return 0
+
+  echo "Restoring Steam session archive into Steam Headless home"
+  tar -xzf "$STEAM_SESSION_ARCHIVE" -C "${DATA_DIR}/home"
+  chown -R "${PUID}:${PGID}" "${DATA_DIR}/home" 2>/dev/null || true
+}
+
 write_env_file() {
   local version="$1"
   local env_file="${SERVICE_DIR}/.env"
+  local mode="primary"
+  local web_ui_mode="vnc"
+  local enable_vnc_audio="true"
+  local enable_steam="true"
+  local enable_sunshine="true"
+  local display="$CONTAINER_DISPLAY"
+  local force_dummy="$FORCE_X11_DUMMY_CONFIG"
+
+  if is_hybrid; then
+    mode="secondary"
+    web_ui_mode="none"
+    enable_vnc_audio="false"
+    enable_steam="false"
+    enable_sunshine="false"
+    display="$HOST_DISPLAY"
+    force_dummy="false"
+  fi
 
   if [ -f "$env_file" ]; then
     cp "$env_file" "${env_file}.bak.$(date +%s)"
@@ -159,7 +247,7 @@ write_env_file() {
 NAME=${CONTAINER_NAME}
 TZ=${TZ}
 USER_LOCALES=en_US.UTF-8 UTF-8
-DISPLAY=${DISPLAY}
+DISPLAY=${display}
 SHM_SIZE=${SHM_SIZE}
 HOME_DIR=${DATA_DIR}/home
 SHARED_SOCKETS_DIR=${DATA_DIR}/sockets
@@ -170,22 +258,22 @@ PGID=${PGID}
 UMASK=000
 USER_PASSWORD=${USER_PASSWORD}
 
-MODE=primary
+MODE=${mode}
 
-WEB_UI_MODE=vnc
-ENABLE_VNC_AUDIO=true
+WEB_UI_MODE=${web_ui_mode}
+ENABLE_VNC_AUDIO=${enable_vnc_audio}
 PORT_NOVNC_WEB=${PORT_NOVNC_WEB}
 NEKO_NAT1TO1=
 
-ENABLE_STEAM=true
+ENABLE_STEAM=${enable_steam}
 STEAM_ARGS=-silent
 
-ENABLE_SUNSHINE=true
+ENABLE_SUNSHINE=${enable_sunshine}
 SUNSHINE_USER=${SUNSHINE_USER}
 SUNSHINE_PASS=${SUNSHINE_PASS}
 
 ENABLE_EVDEV_INPUTS=true
-FORCE_X11_DUMMY_CONFIG=true
+FORCE_X11_DUMMY_CONFIG=${force_dummy}
 DISPLAY_SIZEW=${DISPLAY_SIZEW}
 DISPLAY_SIZEH=${DISPLAY_SIZEH}
 DISPLAY_REFRESH=${DISPLAY_REFRESH}
@@ -200,18 +288,23 @@ EOF
 
 write_compose_file() {
   local compose_file="${SERVICE_DIR}/docker-compose.yml"
+  local x11_source='${SHARED_SOCKETS_DIR}/.X11-unix/'
+
+  if is_hybrid; then
+    x11_source='/tmp/.X11-unix/'
+  fi
 
   if [ -f "$compose_file" ]; then
     cp "$compose_file" "${compose_file}.bak.$(date +%s)"
   fi
 
-  cat >"$compose_file" <<'EOF'
+  cat >"$compose_file" <<EOF
 services:
   steam-headless:
-    image: ${STEAM_HEADLESS_IMAGE:-josh5/steam-headless:latest}
-    container_name: ${NAME}
+    image: \${STEAM_HEADLESS_IMAGE:-josh5/steam-headless:latest}
+    container_name: \${NAME}
     restart: unless-stopped
-    shm_size: ${SHM_SIZE}
+    shm_size: \${SHM_SIZE}
     ipc: host
     ulimits:
       nofile:
@@ -226,47 +319,47 @@ services:
       - apparmor:unconfined
     runtime: nvidia
     network_mode: host
-    hostname: ${NAME}
+    hostname: \${NAME}
     extra_hosts:
-      - "${NAME}:127.0.0.1"
+      - "\${NAME}:127.0.0.1"
     environment:
-      - TZ=${TZ}
-      - USER_LOCALES=${USER_LOCALES}
-      - DISPLAY=${DISPLAY}
-      - DISPLAY_SIZEW=${DISPLAY_SIZEW}
-      - DISPLAY_SIZEH=${DISPLAY_SIZEH}
-      - DISPLAY_REFRESH=${DISPLAY_REFRESH}
-      - DISPLAY_CDEPTH=${DISPLAY_CDEPTH}
-      - DISPLAY_VIDEO_PORT=${DISPLAY_VIDEO_PORT}
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - UMASK=${UMASK}
-      - USER_PASSWORD=${USER_PASSWORD}
-      - MODE=${MODE}
-      - WEB_UI_MODE=${WEB_UI_MODE}
-      - ENABLE_VNC_AUDIO=${ENABLE_VNC_AUDIO}
-      - PORT_NOVNC_WEB=${PORT_NOVNC_WEB}
-      - NEKO_NAT1TO1=${NEKO_NAT1TO1}
-      - ENABLE_STEAM=${ENABLE_STEAM}
-      - STEAM_ARGS=${STEAM_ARGS}
-      - ENABLE_SUNSHINE=${ENABLE_SUNSHINE}
-      - SUNSHINE_USER=${SUNSHINE_USER}
-      - SUNSHINE_PASS=${SUNSHINE_PASS}
-      - ENABLE_EVDEV_INPUTS=${ENABLE_EVDEV_INPUTS}
-      - FORCE_X11_DUMMY_CONFIG=${FORCE_X11_DUMMY_CONFIG}
-      - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES}
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES}
-      - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION}
+      - TZ=\${TZ}
+      - USER_LOCALES=\${USER_LOCALES}
+      - DISPLAY=\${DISPLAY}
+      - DISPLAY_SIZEW=\${DISPLAY_SIZEW}
+      - DISPLAY_SIZEH=\${DISPLAY_SIZEH}
+      - DISPLAY_REFRESH=\${DISPLAY_REFRESH}
+      - DISPLAY_CDEPTH=\${DISPLAY_CDEPTH}
+      - DISPLAY_VIDEO_PORT=\${DISPLAY_VIDEO_PORT}
+      - PUID=\${PUID}
+      - PGID=\${PGID}
+      - UMASK=\${UMASK}
+      - USER_PASSWORD=\${USER_PASSWORD}
+      - MODE=\${MODE}
+      - WEB_UI_MODE=\${WEB_UI_MODE}
+      - ENABLE_VNC_AUDIO=\${ENABLE_VNC_AUDIO}
+      - PORT_NOVNC_WEB=\${PORT_NOVNC_WEB}
+      - NEKO_NAT1TO1=\${NEKO_NAT1TO1}
+      - ENABLE_STEAM=\${ENABLE_STEAM}
+      - STEAM_ARGS=\${STEAM_ARGS}
+      - ENABLE_SUNSHINE=\${ENABLE_SUNSHINE}
+      - SUNSHINE_USER=\${SUNSHINE_USER}
+      - SUNSHINE_PASS=\${SUNSHINE_PASS}
+      - ENABLE_EVDEV_INPUTS=\${ENABLE_EVDEV_INPUTS}
+      - FORCE_X11_DUMMY_CONFIG=\${FORCE_X11_DUMMY_CONFIG}
+      - NVIDIA_DRIVER_CAPABILITIES=\${NVIDIA_DRIVER_CAPABILITIES}
+      - NVIDIA_VISIBLE_DEVICES=\${NVIDIA_VISIBLE_DEVICES}
+      - NVIDIA_DRIVER_VERSION=\${NVIDIA_DRIVER_VERSION}
     devices:
       - /dev/fuse
       - /dev/uinput
     device_cgroup_rules:
       - 'c 13:* rmw'
     volumes:
-      - ${HOME_DIR}/:/home/default/:rw
-      - ${GAMES_DIR}/:/mnt/games/:rw
-      - ${SHARED_SOCKETS_DIR}/.X11-unix/:/tmp/.X11-unix/:rw
-      - ${SHARED_SOCKETS_DIR}/pulse/:/tmp/pulse/:rw
+      - \${HOME_DIR}/:/home/default/:rw
+      - \${GAMES_DIR}/:/mnt/games/:rw
+      - ${x11_source}:/tmp/.X11-unix/:rw
+      - \${SHARED_SOCKETS_DIR}/pulse/:/tmp/pulse/:rw
 EOF
 }
 
@@ -277,10 +370,182 @@ prepare_dirs() {
     "${DATA_DIR}/sockets/.X11-unix" \
     "${DATA_DIR}/sockets/pulse" \
     "$GAMES_DIR" \
-    "$LOG_DIR"
+    "$LOG_DIR" \
+    /tmp/.X11-unix \
+    /etc/X11/xorg.conf.d
 
-  chmod 1777 "${DATA_DIR}/sockets/.X11-unix" 2>/dev/null || true
+  chmod 1777 "${DATA_DIR}/sockets/.X11-unix" /tmp/.X11-unix 2>/dev/null || true
   chown -R "${PUID}:${PGID}" "${DATA_DIR}/home" "$GAMES_DIR" 2>/dev/null || true
+}
+
+write_host_input_config() {
+  is_hybrid || return 0
+
+  cat >/etc/X11/xorg.conf.d/10-evdev-sunshine.conf <<'EOF'
+Section "InputClass"
+    Identifier "Sunshine keyboard"
+    MatchProduct "Keyboard passthrough"
+    Driver "evdev"
+EndSection
+
+Section "InputClass"
+    Identifier "Sunshine mouse"
+    MatchProduct "Mouse passthrough"
+    Driver "evdev"
+EndSection
+
+Section "InputClass"
+    Identifier "Sunshine touch and pen"
+    MatchProduct "Touch passthrough|Pen passthrough"
+    Driver "evdev"
+EndSection
+EOF
+}
+
+make_modeline() {
+  local width="$1"
+  local height="$2"
+  local refresh="$3"
+  local modeline=""
+
+  if command -v cvt >/dev/null 2>&1; then
+    modeline="$(cvt "$width" "$height" "$refresh" | awk -F'Modeline ' '/Modeline/{print $2; exit}' || true)"
+  fi
+
+  if [ -z "$modeline" ] && command -v gtf >/dev/null 2>&1; then
+    modeline="$(gtf "$width" "$height" "$refresh" | awk -F'Modeline ' '/Modeline/{print $2; exit}' || true)"
+  fi
+
+  echo "$modeline"
+}
+
+write_host_xorg_config() {
+  is_hybrid || return 0
+
+  local bus_id
+  local modeline
+  local mode_name
+  bus_id="$(detect_nvidia_xorg_bus_id)"
+  modeline="$(make_modeline "$DISPLAY_SIZEW" "$DISPLAY_SIZEH" "$DISPLAY_REFRESH")"
+
+  if [ -n "$modeline" ]; then
+    mode_name="$(printf '%s\n' "$modeline" | awk '{print $1}' | tr -d '"')"
+  else
+    mode_name="${DISPLAY_SIZEW}x${DISPLAY_SIZEH}"
+  fi
+
+  echo "Writing host Xorg config ${HOST_XORG_CONFIG} with ${bus_id}, mode ${mode_name}"
+
+  cp "$HOST_XORG_CONFIG" "${HOST_XORG_CONFIG}.bak.$(date +%s)" 2>/dev/null || true
+
+  cat >"$HOST_XORG_CONFIG" <<EOF
+Section "ServerLayout"
+    Identifier "Layout0"
+    Screen 0 "Screen0" 0 0
+EndSection
+
+Section "Device"
+    Identifier "Device0"
+    Driver "nvidia"
+    BusID "${bus_id}"
+    Option "AllowEmptyInitialConfiguration" "True"
+    Option "UseDisplayDevice" "${HOST_XORG_CONNECTED_MONITOR}"
+    Option "ConnectedMonitor" "${HOST_XORG_CONNECTED_MONITOR}"
+    Option "ModeValidation" "NoMaxPClkCheck, NoEdidMaxPClkCheck, NoHorizSyncCheck, NoVertRefreshCheck, NoMaxSizeCheck, NoVirtualSizeCheck"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor0"
+    HorizSync 30.0 - 255.0
+    VertRefresh 24.0 - 240.0
+EOF
+
+  if [ -n "$modeline" ]; then
+    printf '    Modeline %s\n' "$modeline" >>"$HOST_XORG_CONFIG"
+    printf '    Option "PreferredMode" "%s"\n' "$mode_name" >>"$HOST_XORG_CONFIG"
+  fi
+
+  cat >>"$HOST_XORG_CONFIG" <<EOF
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Device "Device0"
+    Monitor "Monitor0"
+    DefaultDepth ${DISPLAY_CDEPTH}
+    Option "MetaModes" "${HOST_XORG_CONNECTED_MONITOR}: ${mode_name}"
+    SubSection "Display"
+        Depth ${DISPLAY_CDEPTH}
+        Modes "${mode_name}" "${DISPLAY_SIZEW}x${DISPLAY_SIZEH}"
+        Virtual ${DISPLAY_SIZEW} ${DISPLAY_SIZEH}
+    EndSubSection
+EndSection
+EOF
+}
+
+start_host_xorg() {
+  is_hybrid || return 0
+  [ "$START_HOST_XORG" = "1" ] || return 0
+
+  mkdir -p "$LOG_DIR" /tmp/.X11-unix
+  chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+
+  pkill Xorg 2>/dev/null || true
+  sleep 2
+
+  echo "Starting host Xorg ${HOST_DISPLAY}"
+  Xorg "$HOST_DISPLAY" -config "$HOST_XORG_CONFIG" -noreset -nolisten tcp >"$HOST_XORG_LOG" 2>&1 &
+
+  local socket="/tmp/.X11-unix/X${HOST_DISPLAY#:}"
+  for _ in $(seq 1 30); do
+    [ -S "$socket" ] && break
+    sleep 1
+  done
+
+  if [ ! -S "$socket" ]; then
+    echo "ERROR: host Xorg socket did not appear: ${socket}"
+    tail -160 "$HOST_XORG_LOG" || true
+    exit 1
+  fi
+
+  DISPLAY="$HOST_DISPLAY" xhost +local:root +local:default >/dev/null 2>&1 || true
+  apply_host_resolution || true
+  verify_host_vulkan || true
+}
+
+apply_host_resolution() {
+  is_hybrid || return 0
+
+  local output="$HOST_XORG_OUTPUT"
+  if [ -z "$output" ]; then
+    output="$(DISPLAY="$HOST_DISPLAY" xrandr --query | awk '/ connected/{print $1; exit}' || true)"
+  fi
+  [ -n "$output" ] || return 0
+
+  echo "Host Xorg output: ${output}"
+
+  local modeline
+  local mode_name
+  modeline="$(make_modeline "$DISPLAY_SIZEW" "$DISPLAY_SIZEH" "$DISPLAY_REFRESH")"
+  mode_name="$(printf '%s\n' "$modeline" | awk '{print $1}' | tr -d '"')"
+
+  if [ -n "$modeline" ] && [ -n "$mode_name" ]; then
+    DISPLAY="$HOST_DISPLAY" xrandr --newmode $modeline 2>/dev/null || true
+    DISPLAY="$HOST_DISPLAY" xrandr --addmode "$output" "$mode_name" 2>/dev/null || true
+    DISPLAY="$HOST_DISPLAY" xrandr --output "$output" --mode "$mode_name" 2>/dev/null || true
+  fi
+
+  DISPLAY="$HOST_DISPLAY" xrandr --output "$output" --mode "${DISPLAY_SIZEW}x${DISPLAY_SIZEH}" --rate "$DISPLAY_REFRESH" 2>/dev/null || true
+  DISPLAY="$HOST_DISPLAY" xrandr --query | sed -n '1,45p' || true
+}
+
+verify_host_vulkan() {
+  is_hybrid || return 0
+  [ "$VERIFY_HOST_VULKAN" = "1" ] || return 0
+
+  echo "Checking host Vulkan surface on ${HOST_DISPLAY}"
+  DISPLAY="$HOST_DISPLAY" vulkaninfo --summary 2>&1 \
+    | grep -Ei 'ERROR|deviceName|driverInfo|NVIDIA|surface|present' -A2 -B2 || true
 }
 
 start_stack() {
@@ -300,6 +565,139 @@ start_stack() {
   STEAM_HEADLESS_IMAGE="$IMAGE" docker compose up -d "${recreate_args[@]}"
 }
 
+wait_for_container() {
+  for _ in $(seq 1 90); do
+    if docker exec "$CONTAINER_NAME" true >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "ERROR: container did not become ready: ${CONTAINER_NAME}"
+  docker ps -a
+  exit 1
+}
+
+patch_udev_xorg_restart_loop() {
+  [ "$PATCH_UDEV_XORG_RESTART_LOOP" = "1" ] || return 0
+
+  echo "Patching Steam Headless udev Xorg restart-loop workaround"
+
+  if ! docker exec "$CONTAINER_NAME" test -f /usr/bin/start-dumb-udev.sh >/dev/null 2>&1; then
+    echo "WARNING: /usr/bin/start-dumb-udev.sh not found in ${CONTAINER_NAME}; skipping patch"
+    return 0
+  fi
+
+  docker exec "$CONTAINER_NAME" bash -lc '
+set -e
+if grep -q "supervisorctl restart xorg" /usr/bin/start-dumb-udev.sh; then
+  cp -n /usr/bin/start-dumb-udev.sh /usr/bin/start-dumb-udev.sh.orig 2>/dev/null || true
+  sed -i "s|supervisorctl restart xorg|true # disabled by machine-dev Steam Headless launcher|" /usr/bin/start-dumb-udev.sh
+fi
+supervisorctl restart udev >/dev/null 2>&1 || pkill -f start-dumb-udev.sh 2>/dev/null || true
+'
+}
+
+stop_supervisor_desktop_services() {
+  is_hybrid || return 0
+
+  docker exec "$CONTAINER_NAME" bash -lc '
+supervisorctl stop steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit 2>/dev/null || true
+'
+}
+
+container_exec_default_detached() {
+  docker exec \
+    -u default \
+    -e DISPLAY="$HOST_DISPLAY" \
+    -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" \
+    -e SDL_AUDIODRIVER="pulseaudio" \
+    -e XDG_RUNTIME_DIR="/tmp/.X11-unix/run" \
+    -d "$CONTAINER_NAME" \
+    bash -lc "$1"
+}
+
+wait_for_pulse() {
+  is_hybrid || return 0
+
+  for _ in $(seq 1 60); do
+    if docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" pactl info >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "WARNING: PulseAudio did not answer on ${PULSE_SERVER_PATH}"
+  docker exec "$CONTAINER_NAME" bash -lc 'find /tmp /run /home/default -maxdepth 4 -type s 2>/dev/null | grep -Ei "pulse|native|audio" || true'
+}
+
+start_hybrid_container_services() {
+  is_hybrid || return 0
+
+  echo "Starting container XFCE/Sunshine/Steam on host Xorg ${HOST_DISPLAY}"
+
+  docker exec "$CONTAINER_NAME" bash -lc 'supervisorctl restart pulseaudio >/dev/null 2>&1 || true'
+  wait_for_pulse
+
+  if [ "$START_CONTAINER_XFCE" = "1" ]; then
+    docker exec "$CONTAINER_NAME" bash -lc 'pkill -u default -f "xfce4|xfwm4|xfdesktop|xfce4-panel" 2>/dev/null || true'
+    container_exec_default_detached '
+mkdir -p /home/default/.cache/log /tmp/.X11-unix/run
+dbus-run-session startxfce4 >/home/default/.cache/log/xfce-hostx.log 2>&1
+'
+  fi
+
+  if [ "$START_CONTAINER_SUNSHINE" = "1" ]; then
+    docker exec "$CONTAINER_NAME" bash -lc 'pkill -u default -f sunshine 2>/dev/null || true'
+    docker exec -u default "$CONTAINER_NAME" bash -lc "sunshine --creds '${SUNSHINE_USER}' '${SUNSHINE_PASS}' >/dev/null 2>&1 || true"
+    docker exec -u default "$CONTAINER_NAME" bash -lc '
+CONF=/home/default/.config/sunshine/sunshine.conf
+mkdir -p "$(dirname "$CONF")"
+touch "$CONF"
+if grep -q "^audio_sink" "$CONF"; then
+  sed -i "s/^audio_sink.*/audio_sink = sink-sunshine-stereo.monitor/" "$CONF"
+else
+  printf "\naudio_sink = sink-sunshine-stereo.monitor\n" >>"$CONF"
+fi
+'
+    container_exec_default_detached '
+mkdir -p /home/default/.cache/log
+sunshine >/home/default/.cache/log/sunshine-hostx.log 2>&1
+'
+
+    for _ in $(seq 1 20); do
+      if docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" pactl list short sinks 2>/dev/null | grep -q '^.*sink-sunshine-stereo'; then
+        break
+      fi
+      sleep 1
+    done
+  fi
+
+  docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" bash -lc '
+pactl set-default-sink sink-sunshine-stereo 2>/dev/null || pactl set-default-sink auto_null 2>/dev/null || true
+pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || pactl set-default-source auto_null.monitor 2>/dev/null || true
+'
+
+  if [ "$START_CONTAINER_STEAM" = "1" ]; then
+    docker exec "$CONTAINER_NAME" bash -lc 'pkill -9 -u default -f "steam|steamwebhelper" 2>/dev/null || true'
+    container_exec_default_detached '
+mkdir -p /home/default/.cache/log
+pactl set-default-sink sink-sunshine-stereo 2>/dev/null || true
+pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || true
+steam -silent >/home/default/.cache/log/steam-hostx.log 2>&1
+'
+  fi
+}
+
+start_debug_vnc() {
+  is_hybrid || return 0
+  [ "$ENABLE_DEBUG_VNC" = "1" ] || return 0
+  command -v x11vnc >/dev/null 2>&1 || return 0
+
+  pkill x11vnc 2>/dev/null || true
+  x11vnc -display "$HOST_DISPLAY" -forever -shared -nopw -listen 0.0.0.0 -rfbport "$HOST_VNC_PORT" >"${LOG_DIR}/x11vnc-99.log" 2>&1 &
+}
+
 print_status() {
   local tsip
   tsip="$(tailscale_ip | tr -d '[:space:]')"
@@ -307,30 +705,60 @@ print_status() {
   echo
   echo "Steam Headless stack started."
   echo
+  echo "Mode:"
+  echo "  ${STEAM_HEADLESS_MODE}"
+  if is_hybrid; then
+    echo "  host Xorg display: ${HOST_DISPLAY}"
+    echo "  host Xorg config:  ${HOST_XORG_CONFIG}"
+    echo "  Pulse server:      unix:${PULSE_SERVER_PATH}"
+  fi
+  echo
   echo "Files:"
   echo "  ${SERVICE_DIR}/docker-compose.yml"
   echo "  ${SERVICE_DIR}/.env"
   echo "  ${DATA_DIR}/home/Downloads/NVIDIA_$(cat /sys/module/nvidia/version 2>/dev/null || echo '<version>').run"
+  echo "  udev/Xorg restart-loop patch: ${PATCH_UDEV_XORG_RESTART_LOOP}"
   echo
   echo "Logs:"
   echo "  cd ${SERVICE_DIR}"
   echo "  docker compose logs -f --tail=200"
   echo "  docker logs -f ${CONTAINER_NAME}"
+  if is_hybrid; then
+    echo "  tail -f ${HOST_XORG_LOG}"
+    echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/sunshine-hostx.log"
+    echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/steam-hostx.log"
+    echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/xfce-hostx.log"
+  fi
   echo
   echo "Shell:"
   echo "  docker exec -it ${CONTAINER_NAME} bash"
   echo
   if [ -n "$tsip" ]; then
-    echo "noVNC:"
-    echo "  http://${tsip}:${PORT_NOVNC_WEB}"
-    echo
     echo "Sunshine:"
     echo "  https://${tsip}:47990"
     echo "  user: ${SUNSHINE_USER}"
     echo "  pass: ${SUNSHINE_PASS}"
+    if is_hybrid && [ "$ENABLE_DEBUG_VNC" = "1" ]; then
+      echo
+      echo "Debug VNC:"
+      echo "  ${tsip}:${HOST_VNC_PORT}"
+    elif ! is_hybrid; then
+      echo
+      echo "noVNC:"
+      echo "  http://${tsip}:${PORT_NOVNC_WEB}"
+    fi
   else
-    echo "noVNC: http://<host-ip>:${PORT_NOVNC_WEB}"
     echo "Sunshine: https://<host-ip>:47990"
+    if ! is_hybrid; then
+      echo "noVNC: http://<host-ip>:${PORT_NOVNC_WEB}"
+    fi
+  fi
+  echo
+  echo "Quick checks:"
+  if is_hybrid; then
+    echo "  DISPLAY=${HOST_DISPLAY} xrandr --query"
+    echo "  DISPLAY=${HOST_DISPLAY} vkcube"
+    echo "  docker exec -u default ${CONTAINER_NAME} bash -lc 'PULSE_SERVER=unix:${PULSE_SERVER_PATH} pactl list short sink-inputs'"
   fi
   echo
   docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' | sed -n '1,15p'
@@ -348,18 +776,44 @@ show_logs() {
 
 main() {
   need_root
+
+  case "$STEAM_HEADLESS_MODE" in
+    hybrid|primary) ;;
+    *)
+      echo "ERROR: STEAM_HEADLESS_MODE must be hybrid or primary"
+      exit 1
+      ;;
+  esac
+
   install_basics
   stop_existing_stacks
   prepare_devices
   prepare_dirs
+  write_host_input_config
 
   local nvidia_version
   nvidia_version="${NVIDIA_DRIVER_VERSION:-$(detect_nvidia_version)}"
 
   download_nvidia_driver "$nvidia_version"
+  restore_steam_session
   write_env_file "$nvidia_version"
   write_compose_file
+
+  if is_hybrid; then
+    write_host_xorg_config
+    start_host_xorg
+  fi
+
   start_stack
+  wait_for_container
+  patch_udev_xorg_restart_loop
+
+  if is_hybrid; then
+    stop_supervisor_desktop_services
+    start_hybrid_container_services
+    start_debug_vnc
+  fi
+
   print_status
   show_logs
 }

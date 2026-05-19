@@ -6,7 +6,7 @@ on:
       keepalive_minutes:
         description: "How long to keep the runner alive"
         required: true
-        default: "120"
+        default: "350"
       auto_start_gaming:
         description: "Automatically start the selected gaming stack"
         required: true
@@ -253,6 +253,11 @@ jobs:
               steam-headless)
                 env \
                   STOP_EXISTING_STACKS=1 \
+                  STEAM_HEADLESS_MODE=hybrid \
+                  DISPLAY_SIZEW=1920 \
+                  DISPLAY_SIZEH=1080 \
+                  DISPLAY_REFRESH=120 \
+                  ENABLE_DEBUG_VNC=0 \
                   SHOW_LOGS=1 \
                   FOLLOW_LOGS=0 \
                   ./start-machine-dev-steam-headless.sh

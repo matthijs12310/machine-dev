@@ -75,7 +75,7 @@ Then copy or commit `wolf/cfg/` back to your private repo. This contains pairing
 
 The GitHub Actions workflow defaults to `gaming_stack=none`, so it only brings up SSH/Tailscale unless you choose `wolf`, `sunshine`, or `steam-headless`.
 
-## Experimental Steam Headless Stack
+## Steam Headless Hybrid Stack
 
 Use this when you want to try the Steam Headless Docker image instead of the local Sunshine stack or Wolf:
 
@@ -84,14 +84,20 @@ cd /root/machine-dev
 ./start-machine-dev-steam-headless.sh
 ```
 
-The launcher:
+The default launcher mode is `STEAM_HEADLESS_MODE=hybrid`. This is the Machine.dev/AWS L4 path that avoids Steam Headless' broken NVIDIA dummy-Xorg Vulkan presentation:
 
 - installs Docker Compose if needed
+- installs host Xorg/Vulkan/X11 utilities
+- starts host Xorg on `:99`
+- writes host Xorg input catchall rules for Sunshine keyboard/mouse/touch passthrough
 - writes `/opt/container-services/steam-headless/docker-compose.yml` and `.env`
 - creates persistent data under `/opt/container-data/steam-headless`
 - detects the host NVIDIA driver version
 - downloads the matching Tesla/Data Center NVIDIA `.run` installer into `/home/default/Downloads` inside the container's persistent home
-- starts Steam Headless with noVNC and Sunshine enabled
+- starts Steam Headless in `MODE=secondary`
+- patches the Steam Headless Sunshine/udev Xorg restart-loop workaround
+- starts XFCE, Sunshine, and Steam manually inside the container against host display `:99`
+- starts Steam with `PULSE_SERVER=unix:/tmp/.X11-unix/run/pulse/native`, so game audio reaches Sunshine
 
 This cache step matters on Machine.dev/AWS L4 because Steam Headless tries the generic XFree86 NVIDIA URL first, while the matching L4 driver can live under NVIDIA's Tesla/Data Center download path.
 
@@ -103,13 +109,24 @@ docker compose logs -f --tail=200
 docker exec -it SteamHeadless bash
 ```
 
-Default access:
+Default hybrid access:
 
-- noVNC: `http://<tailscale-ip>:8083`
 - Sunshine: `https://<tailscale-ip>:47990`
 - Sunshine login: `admin` / `admin`
 
-The GitHub Actions workflow can also start it directly with `gaming_stack=steam-headless`. Use `gaming_stack=none` if you only want SSH/Tailscale and prefer to start stacks manually.
+Useful hybrid checks:
+
+```bash
+DISPLAY=:99 xrandr --query
+DISPLAY=:99 vkcube
+docker exec -u default SteamHeadless bash -lc 'PULSE_SERVER=unix:/tmp/.X11-unix/run/pulse/native pactl list short sink-inputs'
+docker exec SteamHeadless tail -f /home/default/.cache/log/sunshine-hostx.log
+docker exec SteamHeadless tail -f /home/default/.cache/log/steam-hostx.log
+```
+
+Use `DISPLAY_REFRESH=144 ./start-machine-dev-steam-headless.sh` to try 144 Hz. The default is 120 Hz because it is more reliable with NVIDIA dummy/VGX modes. Use `STEAM_HEADLESS_MODE=primary` if you want the old all-in-container Steam Headless behavior with noVNC, but Proton/DXVK Vulkan presentation may fail there on Machine.dev L4.
+
+The GitHub Actions workflow can also start it directly with `gaming_stack=steam-headless`. Use `gaming_stack=none` if you only want SSH/Tailscale and prefer to start stacks manually. The workflow keepalive default is 350 minutes.
 
 ## Safer First Boot
 
