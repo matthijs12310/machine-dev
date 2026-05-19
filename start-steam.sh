@@ -104,17 +104,27 @@ steam_session_exists() {
 normalize_steam_layout() {
   mkdir -p "${steam_home}/.steam" "$steam_root"
 
-  if [ -d "${steam_home}/.steam/root" ] && [ ! -e "${steam_root}/steam.sh" ]; then
-    echo "Detected restored Steam root at ${steam_home}/.steam/root; moving it to ${steam_root}"
-    cp -a "${steam_home}/.steam/root/." "$steam_root/"
+  if [ -d "${steam_home}/.steam/root/config" ] && [ ! -f "${steam_root}/config/loginusers.vdf" ]; then
+    echo "Detected restored Steam config at ${steam_home}/.steam/root; copying session config to ${steam_root}"
+    mkdir -p "${steam_root}/config"
+    cp -a "${steam_home}/.steam/root/config/." "${steam_root}/config/"
   fi
 
-  if [ -d "${steam_home}/.local/share/Steam" ] && [ ! -e "${steam_root}/steam.sh" ]; then
-    echo "Detected restored Steam root at ${steam_home}/.local/share/Steam; moving it to ${steam_root}"
-    cp -a "${steam_home}/.local/share/Steam/." "$steam_root/"
+  if [ -d "${steam_home}/.local/share/Steam/config" ] && [ ! -f "${steam_root}/config/loginusers.vdf" ]; then
+    echo "Detected restored Steam config at ${steam_home}/.local/share/Steam; copying session config to ${steam_root}"
+    mkdir -p "${steam_root}/config"
+    cp -a "${steam_home}/.local/share/Steam/config/." "${steam_root}/config/"
   fi
 
-  rm -rf "${steam_home}/.steam/root" "${steam_home}/.steam/steam"
+  find "${steam_home}/.steam" -maxdepth 1 -type f -name 'ssfn*' -exec cp -a {} "$steam_root/" \; 2>/dev/null || true
+  find "${steam_home}/.steam/root" -maxdepth 1 -type f -name 'ssfn*' -exec cp -a {} "$steam_root/" \; 2>/dev/null || true
+  find "${steam_home}/.local/share/Steam" -maxdepth 1 -type f -name 'ssfn*' -exec cp -a {} "$steam_root/" \; 2>/dev/null || true
+
+  if [ -f "${steam_home}/.steam/registry.vdf" ] && [ ! -f "${steam_root}/registry.vdf" ]; then
+    cp -a "${steam_home}/.steam/registry.vdf" "${steam_root}/registry.vdf"
+  fi
+
+  rm -rf "${steam_home}/.steam/root" "${steam_home}/.steam/steam" "${steam_home}/.steam/bin" "${steam_home}/.steam/ubuntu12_32" "${steam_home}/.steam/ubuntu12_64" "${steam_home}/.steam/package" "${steam_home}/.steam/steamrt64"
   ln -s "debian-installation" "${steam_home}/.steam/root"
   ln -s "debian-installation" "${steam_home}/.steam/steam"
 
@@ -201,6 +211,24 @@ restore_steam_session_if_available() {
 
   echo "Restoring Steam session from: ${archive}"
   mkdir -p "$steam_home"
+  if [ "$steam_restore_force" = "1" ]; then
+    echo "Force restore requested; cleaning restored Steam client files while preserving games and config targets"
+    rm -rf \
+      "${steam_home}/.steam/bin" \
+      "${steam_home}/.steam/ubuntu12_32" \
+      "${steam_home}/.steam/ubuntu12_64" \
+      "${steam_home}/.steam/package" \
+      "${steam_home}/.steam/steamrt64" \
+      "${steam_root}/bin" \
+      "${steam_root}/ubuntu12_32" \
+      "${steam_root}/ubuntu12_64" \
+      "${steam_root}/package" \
+      "${steam_root}/steamrt64" \
+      "${steam_root}/steam.sh" \
+      "${steam_root}/steamdeps.txt" \
+      "${steam_root}/steam_msg.sh" \
+      2>/dev/null || true
+  fi
   echo "Archive size: $(du -h "$archive" 2>/dev/null | awk '{print $1}')"
   echo "Archive top entries:"
 

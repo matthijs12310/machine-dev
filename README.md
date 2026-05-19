@@ -5,6 +5,7 @@ Minimal scripts for a fresh Machine.dev GPU gaming box with NVIDIA Xorg, Sunshin
 ## Files
 
 - `start-machine-dev-gaming.sh` - all-in-one launcher for Xorg, Sunshine, input bridge, and Steam.
+- `start-machine-dev-wolf.sh` - alternative Games on Whales/Wolf stack for Moonlight.
 - `setup-machine-dev-sunshine.sh` - installs/starts NVIDIA Xorg and Sunshine.
 - `start-input-bridge.sh` + `moonlight-input-bridge.py` - bridges Moonlight passthrough keyboard/mouse into X11.
 - `start-steam.sh` - starts Steam as `runner`/configured user.
@@ -21,6 +22,42 @@ chmod +x *.sh moonlight-input-bridge.py
 ```
 
 The all-in-one script starts Xorg/Sunshine first, checks NVIDIA GLX/Vulkan, then starts the input bridge and Steam. If GLX/Vulkan is not clean, Steam is skipped and logs are written to `/tmp/machine-dev-gaming`.
+
+## Alternative Wolf Stack
+
+Wolf is a separate Moonlight/GameStream server. Do not run it at the same time as Sunshine, because they use overlapping ports and input/audio/GPU devices.
+
+```bash
+cd /root/machine-dev
+./start-machine-dev-wolf.sh
+```
+
+The Wolf launcher:
+
+- stops the Sunshine/Xorg/Steam stack by default
+- enables `nvidia_drm modeset=1` when possible
+- prepares `/dev/uinput` and `/dev/uhid`
+- builds a matching NVIDIA driver volume from the Tesla/Data Center `.run` installer
+- starts Wolf with that driver volume mounted at `/usr/nvidia`
+- builds a small local `wolf-ui-opengl:local` image so Wolf UI avoids the Godot Vulkan black-screen issue
+
+The manual NVIDIA driver volume is intentional. On this Machine.dev/AWS NVIDIA setup the toolkit-only route can expose the GPU to containers but still break Vulkan presentation, which shows up as black Firefox hardware rendering, crashing `vkcube`, or Proton/DXVK games with audio/input but no video.
+
+Useful Wolf logs:
+
+```bash
+docker logs -f wolf
+docker logs -f "$(docker ps -a --format '{{.Names}}' | grep '^Wolf-UI_' | tail -1)"
+tail -f /tmp/machine-dev-wolf/nvidia-driver-volume-build.log
+```
+
+If the host NVIDIA driver changes, rebuild the driver volume:
+
+```bash
+REBUILD_NVIDIA_DRIVER_VOLUME=1 ./start-machine-dev-wolf.sh
+```
+
+To use Wolf from the GitHub Actions workflow, set `gaming_stack` to `wolf`. Use `sunshine` for the original stack or `none` to only bring up SSH/Tailscale.
 
 ## Safer First Boot
 
