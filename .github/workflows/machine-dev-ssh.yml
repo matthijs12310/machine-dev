@@ -23,7 +23,7 @@ jobs:
   ssh:
     runs-on:
       - machine
-      - gpu=rtx6000
+      - gpu=l4
       - cpu=16
       - regions=eu-south-2
       - tenancy=spot
