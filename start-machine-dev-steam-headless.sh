@@ -56,6 +56,9 @@ HOST_XORG_BUS_ID="${HOST_XORG_BUS_ID:-}"
 HOST_XORG_CONNECTED_MONITOR="${HOST_XORG_CONNECTED_MONITOR:-DFP-0}"
 HOST_XORG_OUTPUT="${HOST_XORG_OUTPUT:-}"
 PULSE_SERVER_PATH="${PULSE_SERVER_PATH:-/tmp/.X11-unix/run/pulse/native}"
+LUCIDLINK_HOST_MOUNT="${LUCIDLINK_HOST_MOUNT:-/mnt/lucidlink}"
+LUCIDLINK_CONTAINER_MOUNT="${LUCIDLINK_CONTAINER_MOUNT:-/mnt/lucidlink}"
+MOUNT_LUCIDLINK="${MOUNT_LUCIDLINK:-auto}" # auto, 1, or 0
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -289,9 +292,14 @@ EOF
 write_compose_file() {
   local compose_file="${SERVICE_DIR}/docker-compose.yml"
   local x11_source='${SHARED_SOCKETS_DIR}/.X11-unix/'
+  local lucid_mount_line=""
 
   if is_hybrid; then
     x11_source='/tmp/.X11-unix/'
+  fi
+
+  if [ "$MOUNT_LUCIDLINK" = "1" ] || { [ "$MOUNT_LUCIDLINK" = "auto" ] && [ -d "$LUCIDLINK_HOST_MOUNT" ]; }; then
+    lucid_mount_line="      - ${LUCIDLINK_HOST_MOUNT}/:${LUCIDLINK_CONTAINER_MOUNT}/:rw"
   fi
 
   if [ -f "$compose_file" ]; then
@@ -358,6 +366,7 @@ services:
     volumes:
       - \${HOME_DIR}/:/home/default/:rw
       - \${GAMES_DIR}/:/mnt/games/:rw
+${lucid_mount_line}
       - ${x11_source}:/tmp/.X11-unix/:rw
       - \${SHARED_SOCKETS_DIR}/pulse/:/tmp/pulse/:rw
 EOF
@@ -578,6 +587,18 @@ wait_for_container() {
   exit 1
 }
 
+wait_for_supervisor() {
+  for _ in $(seq 1 120); do
+    if docker exec "$CONTAINER_NAME" supervisorctl status >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "WARNING: supervisorctl did not become ready in ${CONTAINER_NAME}"
+  docker logs --tail=120 "$CONTAINER_NAME" || true
+}
+
 patch_udev_xorg_restart_loop() {
   [ "$PATCH_UDEV_XORG_RESTART_LOOP" = "1" ] || return 0
 
@@ -601,8 +622,16 @@ supervisorctl restart udev >/dev/null 2>&1 || pkill -f start-dumb-udev.sh 2>/dev
 stop_supervisor_desktop_services() {
   is_hybrid || return 0
 
+  echo "Stopping container-managed desktop services for hybrid mode"
+
   docker exec "$CONTAINER_NAME" bash -lc '
-supervisorctl stop steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit 2>/dev/null || true
+for _ in $(seq 1 10); do
+  supervisorctl stop steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit 2>/dev/null || true
+  sleep 1
+  supervisorctl status steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit 2>/dev/null \
+    | awk '"'"'$2 !~ /STOPPED|FATAL/ { bad=1 } END { exit bad }'"'"' && exit 0
+done
+true
 '
 }
 
@@ -635,9 +664,12 @@ start_hybrid_container_services() {
   is_hybrid || return 0
 
   echo "Starting container XFCE/Sunshine/Steam on host Xorg ${HOST_DISPLAY}"
+  mkdir -p "$LOG_DIR"
+  printf '%s\n' "hybrid post-start begin $(date -Is)" >"${LOG_DIR}/hybrid-post-start.log"
 
   docker exec "$CONTAINER_NAME" bash -lc 'supervisorctl restart pulseaudio >/dev/null 2>&1 || true'
   wait_for_pulse
+  printf '%s\n' "pulse ready/checked $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
 
   if [ "$START_CONTAINER_XFCE" = "1" ]; then
     docker exec "$CONTAINER_NAME" bash -lc 'pkill -u default -f "xfce4|xfwm4|xfdesktop|xfce4-panel" 2>/dev/null || true'
@@ -645,6 +677,7 @@ start_hybrid_container_services() {
 mkdir -p /home/default/.cache/log /tmp/.X11-unix/run
 dbus-run-session startxfce4 >/home/default/.cache/log/xfce-hostx.log 2>&1
 '
+    printf '%s\n' "xfce launched $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
   fi
 
   if [ "$START_CONTAINER_SUNSHINE" = "1" ]; then
@@ -664,6 +697,7 @@ fi
 mkdir -p /home/default/.cache/log
 sunshine >/home/default/.cache/log/sunshine-hostx.log 2>&1
 '
+    printf '%s\n' "sunshine launched $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
 
     for _ in $(seq 1 20); do
       if docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" pactl list short sinks 2>/dev/null | grep -q '^.*sink-sunshine-stereo'; then
@@ -686,7 +720,17 @@ pactl set-default-sink sink-sunshine-stereo 2>/dev/null || true
 pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || true
 steam -silent >/home/default/.cache/log/steam-hostx.log 2>&1
 '
+    printf '%s\n' "steam launched $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
   fi
+
+  docker exec "$CONTAINER_NAME" bash -lc '
+echo "==== supervisor selected ===="
+supervisorctl status steam sunshine xorg desktop x11vnc audiostream frontend accounts-daemon polkit 2>/dev/null || true
+echo "==== manual procs ===="
+pgrep -a "sunshine|steam|xfce|xfwm|xfdesktop" || true
+' >>"${LOG_DIR}/hybrid-post-start.log" 2>&1 || true
+
+  printf '%s\n' "hybrid post-start done $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
 }
 
 start_debug_vnc() {
@@ -718,6 +762,9 @@ print_status() {
   echo "  ${SERVICE_DIR}/.env"
   echo "  ${DATA_DIR}/home/Downloads/NVIDIA_$(cat /sys/module/nvidia/version 2>/dev/null || echo '<version>').run"
   echo "  udev/Xorg restart-loop patch: ${PATCH_UDEV_XORG_RESTART_LOOP}"
+  if [ "$MOUNT_LUCIDLINK" != "0" ] && [ -d "$LUCIDLINK_HOST_MOUNT" ]; then
+    echo "  LucidLink mount: ${LUCIDLINK_HOST_MOUNT} -> ${LUCIDLINK_CONTAINER_MOUNT}"
+  fi
   echo
   echo "Logs:"
   echo "  cd ${SERVICE_DIR}"
@@ -806,6 +853,7 @@ main() {
 
   start_stack
   wait_for_container
+  wait_for_supervisor
   patch_udev_xorg_restart_loop
 
   if is_hybrid; then
