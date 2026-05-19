@@ -14,13 +14,15 @@ steam_home="/home/${steam_user}"
 runtime_dir="${XDG_RUNTIME_DIR:-/tmp/runtime-${steam_user}}"
 xdg_config_home="${steam_home}/.config"
 xdg_cache_home="${steam_home}/.cache"
-pulse_server="${PULSE_SERVER:-unix:${runtime_dir}/pulse/native}"
+pulse_socket="${PULSE_SOCKET:-/tmp/pulse-native}"
+pulse_server="${PULSE_SERVER:-unix:${pulse_socket}}"
 steam_session_archive="${STEAM_SESSION_ARCHIVE:-}"
 steam_session_url="${STEAM_SESSION_URL:-}"
 steam_session_repo="${STEAM_SESSION_REPO:-matthijs12310/machine-dev}"
 steam_session_asset_id="${STEAM_SESSION_ASSET_ID:-423715286}"
 steam_session_token="${STEAM_SESSION_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
 steam_restore_force="${STEAM_RESTORE_FORCE:-0}"
+steam_restore_marker="${steam_home}/.machine-dev-steam-session-restored"
 
 need_root_for_install() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -155,7 +157,7 @@ download_steam_session_archive() {
 restore_steam_session_if_available() {
   local archive=""
 
-  if [ "$steam_restore_force" != "1" ] && steam_session_exists; then
+  if [ "$steam_restore_force" != "1" ] && [ -f "$steam_restore_marker" ] && steam_session_exists; then
     echo "Steam session already exists for ${steam_user}; restore skipped."
     return 0
   fi
@@ -171,6 +173,7 @@ restore_steam_session_if_available() {
 
   echo "Restoring Steam session from: ${archive}"
   mkdir -p "$steam_home"
+  echo "Archive size: $(du -h "$archive" 2>/dev/null | awk '{print $1}')"
 
   case "$archive" in
     *.tar.zst|*.zst)
@@ -189,6 +192,17 @@ restore_steam_session_if_available() {
   if [ "$(id -u)" -eq 0 ]; then
     chown -R "$steam_user:$steam_user" "${steam_home}/.steam" "${steam_home}/.local" 2>/dev/null || true
   fi
+
+  touch "$steam_restore_marker" 2>/dev/null || true
+  if [ "$(id -u)" -eq 0 ]; then
+    chown "$steam_user:$steam_user" "$steam_restore_marker" 2>/dev/null || true
+  fi
+
+  echo "Steam session restore marker: ${steam_restore_marker}"
+  echo "Steam session files after restore:"
+  find "${steam_home}/.steam" "${steam_home}/.local/share/Steam" \
+    \( -name loginusers.vdf -o -name registry.vdf -o -name 'ssfn*' \) \
+    -maxdepth 5 -print 2>/dev/null || true
 }
 
 start_steam_as_user() {
@@ -201,6 +215,7 @@ start_steam_as_user() {
     XDG_CONFIG_HOME="$xdg_config_home" \
     XDG_CACHE_HOME="$xdg_cache_home" \
     DBUS_SESSION_BUS_ADDRESS= \
+    PULSE_SOCKET="$pulse_socket" \
     PULSE_SERVER="$pulse_server" \
     HOME="$steam_home" \
     USER="$steam_user" \
@@ -217,6 +232,7 @@ start_steam_current_user() {
   export XDG_RUNTIME_DIR="$runtime_dir"
   export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$xdg_config_home}"
   export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$xdg_cache_home}"
+  export PULSE_SOCKET="${PULSE_SOCKET:-$pulse_socket}"
   export PULSE_SERVER="${PULSE_SERVER:-$pulse_server}"
   export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:${PATH:-}"
   export HOME="${HOME:-$steam_home}"

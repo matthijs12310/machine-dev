@@ -9,6 +9,8 @@ fi
 audio_user="${AUDIO_USER:-${STEAM_USER:-$default_audio_user}}"
 audio_home="${AUDIO_HOME:-/home/${audio_user}}"
 runtime_dir="${XDG_RUNTIME_DIR:-/tmp/runtime-${audio_user}}"
+pulse_socket="${PULSE_SOCKET:-/tmp/pulse-native}"
+pulse_server="unix:${pulse_socket}"
 
 if [ "$(id -u)" -eq 0 ]; then
   if ! id "$audio_user" >/dev/null 2>&1; then
@@ -24,6 +26,9 @@ if [ "$(id -u)" -eq 0 ]; then
   mkdir -p "$runtime_dir" "${audio_home}/.config/pulse" "${audio_home}/.cache"
   chown -R "$audio_user:$audio_user" "$runtime_dir" "${audio_home}/.config" "${audio_home}/.cache"
   chmod 700 "$runtime_dir" "${audio_home}/.config/pulse"
+  pkill -u "$audio_user" pulseaudio 2>/dev/null || true
+  rm -rf "${runtime_dir}/pulse"
+  rm -f "$pulse_socket"
 
   runner_script="/tmp/start-pulseaudio-${audio_user}.sh"
   install -m 755 "$0" "$runner_script"
@@ -36,6 +41,7 @@ if [ "$(id -u)" -eq 0 ]; then
     XDG_CONFIG_HOME="${audio_home}/.config" \
     XDG_CACHE_HOME="${audio_home}/.cache" \
     XDG_RUNTIME_DIR="$runtime_dir" \
+    PULSE_SOCKET="$pulse_socket" \
     DBUS_SESSION_BUS_ADDRESS= \
     bash "$runner_script"
 fi
@@ -45,13 +51,17 @@ export XDG_CONFIG_HOME="${audio_home}/.config"
 export XDG_CACHE_HOME="${audio_home}/.cache"
 export XDG_RUNTIME_DIR="$runtime_dir"
 unset PULSE_SERVER PULSE_RUNTIME_PATH PULSE_CONFIG_PATH PULSE_STATE_PATH PULSE_CLIENTCONFIG
+pulse_socket="${PULSE_SOCKET:-/tmp/pulse-native}"
+pulse_server="unix:${pulse_socket}"
 
 mkdir -p "$XDG_CONFIG_HOME/pulse" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_CONFIG_HOME/pulse" "$XDG_RUNTIME_DIR"
+rm -rf "$XDG_RUNTIME_DIR/pulse"
+rm -f "$pulse_socket"
 
-cat >"$XDG_CONFIG_HOME/pulse/default.pa" <<'EOF'
+cat >"$XDG_CONFIG_HOME/pulse/default.pa" <<EOF
 .nofail
-load-module module-native-protocol-unix auth-anonymous=1
+load-module module-native-protocol-unix socket=${pulse_socket} auth-anonymous=1
 load-module module-always-sink
 EOF
 
@@ -62,12 +72,19 @@ alternate-sample-rate = 44100
 EOF
 
 pulseaudio --kill >/dev/null 2>&1 || true
+pkill -u "$(id -un)" pulseaudio >/dev/null 2>&1 || true
+rm -rf "$XDG_RUNTIME_DIR/pulse"
+rm -f "$pulse_socket"
 pulseaudio --start --exit-idle-time=-1
 
 for _ in $(seq 1 20); do
-  if pactl info >/dev/null 2>&1; then
+  if PULSE_SERVER="$pulse_server" pactl info >/dev/null 2>&1 \
+    && PULSE_SERVER="$pulse_server" pactl list short modules 2>/dev/null | grep -q 'module-native-protocol-unix.*auth-anonymous=1'; then
+    chmod 666 "$pulse_socket" 2>/dev/null || true
     echo "PulseAudio ready"
-    pactl list short sinks || true
+    echo "PulseAudio socket: ${pulse_server}"
+    PULSE_SERVER="$pulse_server" pactl list short modules | grep native || true
+    PULSE_SERVER="$pulse_server" pactl list short sinks || true
     exit 0
   fi
   sleep 0.5

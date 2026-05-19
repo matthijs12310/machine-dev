@@ -13,7 +13,8 @@ export STEAM_RUNTIME="${STEAM_RUNTIME:-1}"
 export STEAM_LD_LIBRARY_PATH="${STEAM_LD_LIBRARY_PATH:-/usr/lib32:/usr/lib/x86_64-linux-gnu}"
 export STEAM_ARGS="${STEAM_ARGS:--cef-disable-gpu -cef-disable-gpu-compositing -cef-disable-dev-shm-usage -no-cef-sandbox}"
 export AUDIO_RUNTIME_DIR="${AUDIO_RUNTIME_DIR:-/tmp/runtime-${STEAM_USER}}"
-export PULSE_SERVER="${PULSE_SERVER:-unix:${AUDIO_RUNTIME_DIR}/pulse/native}"
+export PULSE_SOCKET="${PULSE_SOCKET:-/tmp/pulse-native}"
+export PULSE_SERVER="${PULSE_SERVER:-unix:${PULSE_SOCKET}}"
 
 export SUNSHINE_CONFIG_DIR="${SUNSHINE_CONFIG_DIR:-/root/.config/sunshine}"
 
@@ -258,6 +259,7 @@ start_sunshine_stack() {
     GAME_DEPTH="$GAME_DEPTH" \
     STEAM_USER="$STEAM_USER" \
     AUDIO_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+    PULSE_SOCKET="$PULSE_SOCKET" \
     PULSE_SERVER="$PULSE_SERVER" \
     SUNSHINE_CONFIG_DIR="$SUNSHINE_CONFIG_DIR" \
     LOG_DIR=/tmp/machine-dev-sunshine \
@@ -281,7 +283,7 @@ start_audio() {
   fi
 
   echo "Starting PulseAudio using: ${audio_start}"
-  "$audio_start" >"${LOG_DIR}/pulseaudio.log" 2>&1 || {
+  PULSE_SOCKET="$PULSE_SOCKET" "$audio_start" >"${LOG_DIR}/pulseaudio.log" 2>&1 || {
     echo "WARNING: PulseAudio setup failed. See ${LOG_DIR}/pulseaudio.log"
     return 0
   }
@@ -374,6 +376,7 @@ start_steam() {
     STEAM_RUNTIME="$STEAM_RUNTIME" \
     STEAM_LD_LIBRARY_PATH="$STEAM_LD_LIBRARY_PATH" \
     XDG_RUNTIME_DIR="$AUDIO_RUNTIME_DIR" \
+    PULSE_SOCKET="$PULSE_SOCKET" \
     PULSE_SERVER="$PULSE_SERVER" \
     STEAM_ARGS="$STEAM_ARGS" \
     "$steam_start" \
