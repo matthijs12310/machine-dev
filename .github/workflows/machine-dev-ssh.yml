@@ -187,21 +187,24 @@ jobs:
           set -euo pipefail
 
           sudo mkdir -p /tmp/machine-dev-gaming
-          cd /root/machine-dev
 
           echo "Starting Machine.dev gaming stack automatically"
-          sudo env \
-            DISPLAY=:99 \
-            STEAM_USER=runner \
-            START_SUNSHINE=1 \
-            START_AUDIO=1 \
-            START_INPUT=1 \
-            START_STEAM=1 \
-            VERIFY_GPU=1 \
-            WAIT_FOR_MOONLIGHT=0 \
-            PULSE_SOCKET=/tmp/pulse-native \
-            PULSE_SERVER=unix:/tmp/pulse-native \
-            ./start-machine-dev-gaming.sh 2>&1 | sudo tee /tmp/machine-dev-gaming/launch.log
+          sudo bash -lc '
+            set -euo pipefail
+            cd /root/machine-dev
+            env \
+              DISPLAY=:99 \
+              STEAM_USER=runner \
+              START_SUNSHINE=1 \
+              START_AUDIO=1 \
+              START_INPUT=1 \
+              START_STEAM=1 \
+              VERIFY_GPU=1 \
+              WAIT_FOR_MOONLIGHT=0 \
+              PULSE_SOCKET=/tmp/pulse-native \
+              PULSE_SERVER=unix:/tmp/pulse-native \
+              ./start-machine-dev-gaming.sh
+          ' 2>&1 | sudo tee /tmp/machine-dev-gaming/launch.log
 
       - name: Print connection info
         run: |
