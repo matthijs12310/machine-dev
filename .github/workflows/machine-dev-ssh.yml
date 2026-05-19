@@ -14,7 +14,12 @@ on:
       gaming_stack:
         description: "Which gaming stack to start: sunshine, wolf, or none"
         required: true
-        default: "wolf"
+        type: choice
+        default: "none"
+        options:
+          - none
+          - wolf
+          - sunshine
 
 permissions:
   contents: read
@@ -203,7 +208,7 @@ jobs:
 
           sudo mkdir -p /tmp/machine-dev-gaming
 
-          case "${GAMING_STACK:-wolf}" in
+          case "${GAMING_STACK:-none}" in
             sunshine|wolf|none)
               ;;
             *)
@@ -213,16 +218,16 @@ jobs:
               ;;
           esac
 
-          if [ "${GAMING_STACK:-wolf}" = "none" ]; then
+          if [ "${GAMING_STACK:-none}" = "none" ]; then
             echo "Gaming stack autostart disabled by gaming_stack=none"
             exit 0
           fi
 
-          echo "Starting Machine.dev ${GAMING_STACK:-wolf} stack automatically"
+          echo "Starting Machine.dev ${GAMING_STACK:-none} stack automatically"
           sudo bash -lc '
             set -euo pipefail
             cd /root/machine-dev
-            case "'"${GAMING_STACK:-wolf}"'" in
+            case "'"${GAMING_STACK:-none}"'" in
               sunshine)
                 env \
                   DISPLAY=:99 \
@@ -264,6 +269,7 @@ jobs:
           echo "  cd /root/machine-dev"
           echo "  ./start-machine-dev-gaming.sh"
           echo "  ./start-machine-dev-wolf.sh"
+          echo "  # For third-party stacks, run the workflow with gaming_stack=none and install/start them manually over SSH."
           echo ""
           echo "Gaming stack logs:"
           echo "  tail -f /tmp/machine-dev-gaming/launch.log"
