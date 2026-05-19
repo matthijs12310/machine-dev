@@ -8,13 +8,13 @@ on:
         required: true
         default: "120"
       auto_start_gaming:
-        description: "Automatically start Xorg, Sunshine, audio, input bridge, and Steam"
+        description: "Automatically start the selected gaming stack"
         required: true
         default: "true"
       gaming_stack:
         description: "Which gaming stack to start: sunshine, wolf, or none"
         required: true
-        default: "sunshine"
+        default: "wolf"
 
 permissions:
   contents: read
@@ -175,6 +175,15 @@ jobs:
           sudo chmod 600 /root/.config/sunshine/credentials/cakey.pem
           echo "Sunshine pairing state restored"
 
+          if [ -d /root/machine-dev/wolf/cfg ]; then
+            sudo mkdir -p /etc/wolf/cfg
+            sudo cp -a /root/machine-dev/wolf/cfg/. /etc/wolf/cfg/
+            sudo chmod 600 /etc/wolf/cfg/key.pem 2>/dev/null || true
+            echo "Wolf pairing/config state restored"
+          else
+            echo "No Wolf pairing/config state found in repo, Wolf will generate one"
+          fi
+
           echo "Downloading Steam session release asset"
           curl -fL \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -194,7 +203,7 @@ jobs:
 
           sudo mkdir -p /tmp/machine-dev-gaming
 
-          case "${GAMING_STACK:-sunshine}" in
+          case "${GAMING_STACK:-wolf}" in
             sunshine|wolf|none)
               ;;
             *)
@@ -204,16 +213,16 @@ jobs:
               ;;
           esac
 
-          if [ "${GAMING_STACK:-sunshine}" = "none" ]; then
+          if [ "${GAMING_STACK:-wolf}" = "none" ]; then
             echo "Gaming stack autostart disabled by gaming_stack=none"
             exit 0
           fi
 
-          echo "Starting Machine.dev ${GAMING_STACK:-sunshine} stack automatically"
+          echo "Starting Machine.dev ${GAMING_STACK:-wolf} stack automatically"
           sudo bash -lc '
             set -euo pipefail
             cd /root/machine-dev
-            case "'"${GAMING_STACK:-sunshine}"'" in
+            case "'"${GAMING_STACK:-wolf}"'" in
               sunshine)
                 env \
                   DISPLAY=:99 \

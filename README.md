@@ -38,10 +38,14 @@ The Wolf launcher:
 - enables `nvidia_drm modeset=1` when possible
 - prepares `/dev/uinput` and `/dev/uhid`
 - builds a matching NVIDIA driver volume from the Tesla/Data Center `.run` installer
+- writes the NVIDIA Vulkan ICD into that volume so Proton/DXVK sees NVIDIA instead of `llvmpipe`
 - starts Wolf with that driver volume mounted at `/usr/nvidia`
+- patches the Wolf Steam app with `NVIDIA_DRIVER_VOLUME_NAME`, `VK_ICD_FILENAMES`, and `LD_LIBRARY_PATH`
 - builds a small local `wolf-ui-opengl:local` image so Wolf UI avoids the Godot Vulkan black-screen issue
 
 The manual NVIDIA driver volume is intentional. On this Machine.dev/AWS NVIDIA setup the toolkit-only route can expose the GPU to containers but still break Vulkan presentation, which shows up as black Firefox hardware rendering, crashing `vkcube`, or Proton/DXVK games with audio/input but no video.
+
+Wolf stores Moonlight pairing state in `/etc/wolf/cfg/config.toml` under `paired_clients`, together with a host `uuid`. It also generates `/etc/wolf/cfg/cert.pem` and `/etc/wolf/cfg/key.pem`. If `wolf/cfg/` exists in this repo, `start-machine-dev-wolf.sh` restores it to `/etc/wolf/cfg/` before Wolf starts.
 
 Useful Wolf logs:
 
@@ -57,7 +61,18 @@ If the host NVIDIA driver changes, rebuild the driver volume:
 REBUILD_NVIDIA_DRIVER_VOLUME=1 ./start-machine-dev-wolf.sh
 ```
 
-To use Wolf from the GitHub Actions workflow, set `gaming_stack` to `wolf`. Use `sunshine` for the original stack or `none` to only bring up SSH/Tailscale.
+To save Wolf pairing state after pairing Moonlight once:
+
+```bash
+cd /root/machine-dev
+mkdir -p wolf/cfg
+cp -a /etc/wolf/cfg/config.toml /etc/wolf/cfg/cert.pem /etc/wolf/cfg/key.pem wolf/cfg/
+chmod 600 wolf/cfg/key.pem
+```
+
+Then copy or commit `wolf/cfg/` back to your private repo. This contains pairing/auth material, so keep the repo private.
+
+The GitHub Actions workflow starts Wolf by default with `gaming_stack=wolf`. Use `sunshine` for the original stack or `none` to only bring up SSH/Tailscale.
 
 ## Safer First Boot
 

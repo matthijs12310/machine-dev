@@ -3,6 +3,7 @@ set -euo pipefail
 
 LOG_DIR="${LOG_DIR:-/tmp/machine-dev-wolf}"
 WOLF_CONFIG_DIR="${WOLF_CONFIG_DIR:-/etc/wolf}"
+WOLF_REPO_STATE_DIR="${WOLF_REPO_STATE_DIR:-$(pwd)/wolf}"
 WOLF_CONTAINER="${WOLF_CONTAINER:-wolf}"
 WOLF_IMAGE="${WOLF_IMAGE:-ghcr.io/games-on-whales/wolf:stable}"
 WOLF_UI_BASE_IMAGE="${WOLF_UI_BASE_IMAGE:-ghcr.io/games-on-whales/wolf-ui:main}"
@@ -13,6 +14,8 @@ WOLF_INTERNAL_IP="${WOLF_INTERNAL_IP:-}"
 WOLF_INTERNAL_MAC="${WOLF_INTERNAL_MAC:-02:00:00:00:00:01}"
 STOP_EXISTING_STACKS="${STOP_EXISTING_STACKS:-1}"
 PATCH_WOLF_UI="${PATCH_WOLF_UI:-1}"
+RESTORE_WOLF_STATE="${RESTORE_WOLF_STATE:-1}"
+RESTORE_WOLF_STATE_FORCE="${RESTORE_WOLF_STATE_FORCE:-0}"
 REBUILD_NVIDIA_DRIVER_VOLUME="${REBUILD_NVIDIA_DRIVER_VOLUME:-0}"
 VERIFY_NVIDIA_DOCKER="${VERIFY_NVIDIA_DOCKER:-0}"
 
@@ -99,6 +102,30 @@ verify_nvidia_docker() {
   docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
 }
 
+restore_wolf_state_from_repo() {
+  [ "$RESTORE_WOLF_STATE" = "1" ] || return 0
+
+  local source_dir=""
+  if [ -d "${WOLF_REPO_STATE_DIR}/cfg" ]; then
+    source_dir="$WOLF_REPO_STATE_DIR"
+  elif [ -d "${WOLF_REPO_STATE_DIR}" ] && [ -f "${WOLF_REPO_STATE_DIR}/config.toml" ]; then
+    source_dir="$(dirname "$WOLF_REPO_STATE_DIR")"
+  fi
+
+  [ -n "$source_dir" ] || return 0
+  [ -f "${source_dir}/cfg/config.toml" ] || [ -f "${source_dir}/cfg/cert.pem" ] || [ -f "${source_dir}/cfg/key.pem" ] || return 0
+
+  if [ -f "${WOLF_CONFIG_DIR}/cfg/config.toml" ] && [ "$RESTORE_WOLF_STATE_FORCE" != "1" ]; then
+    echo "Wolf state already exists at ${WOLF_CONFIG_DIR}; not overwriting"
+    return 0
+  fi
+
+  echo "Restoring Wolf state from ${source_dir}/cfg to ${WOLF_CONFIG_DIR}/cfg"
+  mkdir -p "${WOLF_CONFIG_DIR}/cfg"
+  cp -a "${source_dir}/cfg/." "${WOLF_CONFIG_DIR}/cfg/"
+  chmod 600 "${WOLF_CONFIG_DIR}/cfg/key.pem" 2>/dev/null || true
+}
+
 build_nvidia_driver_volume() {
   mkdir -p "$LOG_DIR"
 
@@ -155,6 +182,25 @@ EOF
   docker run --rm \
     -v "${NVIDIA_DRIVER_VOLUME}:/usr/nvidia" \
     "$NVIDIA_DRIVER_IMAGE" true >/dev/null
+
+  ensure_nvidia_vulkan_icd
+}
+
+ensure_nvidia_vulkan_icd() {
+  echo "Ensuring NVIDIA Vulkan ICD exists in ${NVIDIA_DRIVER_VOLUME}"
+  docker run --rm -v "${NVIDIA_DRIVER_VOLUME}:/usr/nvidia" ubuntu:22.04 bash -lc '
+set -e
+mkdir -p /usr/nvidia/share/vulkan/icd.d
+cat > /usr/nvidia/share/vulkan/icd.d/nvidia_icd.json <<EOF
+{
+  "file_format_version": "1.0.0",
+  "ICD": {
+    "library_path": "libGLX_nvidia.so.0",
+    "api_version": "1.4.0"
+  }
+}
+EOF
+'
 }
 
 docker_device_args() {
@@ -264,6 +310,29 @@ new_env = """        env = [
 if old_env in s:
     s = s.replace(old_env, new_env)
 
+steam_env = (
+    "        env = [ 'PROTON_LOG=1', 'RUN_SWAY=true', "
+    "'NVIDIA_DRIVER_VOLUME_NAME=${NVIDIA_DRIVER_VOLUME}', "
+    "'VK_ICD_FILENAMES=/usr/nvidia/share/vulkan/icd.d/nvidia_icd.json', "
+    "'LD_LIBRARY_PATH=/usr/nvidia/lib:/usr/nvidia/lib32', "
+    "'GOW_REQUIRED_DEVICES=/dev/input/* /dev/dri/* /dev/nvidia*' ]"
+)
+
+blocks = s.split("    [[profiles.apps]]")
+for i, block in enumerate(blocks):
+    if "title = 'Steam'" not in block and 'title = "Steam"' not in block:
+        continue
+
+    lines = block.splitlines()
+    for j, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("env = [") and "GOW_REQUIRED_DEVICES=/dev/input/* /dev/dri/* /dev/nvidia*" in stripped:
+            lines[j] = steam_env
+            break
+    blocks[i] = "\n".join(lines)
+
+s = "    [[profiles.apps]]".join(blocks)
+
 config.write_text(s)
 PY
 }
@@ -311,7 +380,9 @@ main() {
   ensure_nvidia_modeset
   ensure_devices
   verify_nvidia_docker
+  restore_wolf_state_from_repo
   build_nvidia_driver_volume
+  ensure_nvidia_vulkan_icd
   build_wolf_ui_opengl_image
   start_wolf_container
   if wait_for_config; then
