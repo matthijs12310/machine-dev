@@ -83,7 +83,7 @@ install_basics() {
 
   apt-get update
   apt-get install -y --no-install-recommends \
-    ca-certificates curl git docker.io docker-compose-plugin
+    ca-certificates curl git docker.io docker-compose containerd
 
   if is_hybrid; then
     apt-get install -y --no-install-recommends \
