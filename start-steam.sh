@@ -24,6 +24,7 @@ steam_session_asset_id="${STEAM_SESSION_ASSET_ID:-423715286}"
 steam_session_token="${STEAM_SESSION_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
 steam_restore_force="${STEAM_RESTORE_FORCE:-0}"
 steam_restore_marker="${steam_home}/.machine-dev-steam-session-restored"
+steam_root="${steam_home}/.steam/debian-installation"
 
 need_root_for_install() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -97,10 +98,29 @@ prepare_user_and_runtime() {
 }
 
 steam_session_exists() {
-  [ -f "${steam_home}/.steam/debian-installation/config/loginusers.vdf" ] \
-    || [ -f "${steam_home}/.steam/steam/config/loginusers.vdf" ] \
-    || [ -f "${steam_home}/.steam/root/config/loginusers.vdf" ] \
-    || [ -f "${steam_home}/.local/share/Steam/config/loginusers.vdf" ]
+  [ -f "${steam_root}/config/loginusers.vdf" ]
+}
+
+normalize_steam_layout() {
+  mkdir -p "${steam_home}/.steam" "$steam_root"
+
+  if [ -d "${steam_home}/.steam/root" ] && [ ! -e "${steam_root}/steam.sh" ]; then
+    echo "Detected restored Steam root at ${steam_home}/.steam/root; moving it to ${steam_root}"
+    cp -a "${steam_home}/.steam/root/." "$steam_root/"
+  fi
+
+  if [ -d "${steam_home}/.local/share/Steam" ] && [ ! -e "${steam_root}/steam.sh" ]; then
+    echo "Detected restored Steam root at ${steam_home}/.local/share/Steam; moving it to ${steam_root}"
+    cp -a "${steam_home}/.local/share/Steam/." "$steam_root/"
+  fi
+
+  rm -rf "${steam_home}/.steam/root" "${steam_home}/.steam/steam"
+  ln -s "debian-installation" "${steam_home}/.steam/root"
+  ln -s "debian-installation" "${steam_home}/.steam/steam"
+
+  mkdir -p "${steam_home}/.local/share"
+  rm -rf "${steam_home}/.local/share/Steam"
+  ln -s "${steam_root}" "${steam_home}/.local/share/Steam"
 }
 
 find_steam_session_archive() {
@@ -165,6 +185,7 @@ restore_steam_session_if_available() {
   local first_entry=""
 
   if [ "$steam_restore_force" != "1" ] && [ -f "$steam_restore_marker" ] && steam_session_exists; then
+    normalize_steam_layout
     echo "Steam session already exists for ${steam_user}; restore skipped."
     return 0
   fi
@@ -221,6 +242,8 @@ restore_steam_session_if_available() {
     rm -rf "${steam_home}/home"
   fi
 
+  normalize_steam_layout
+
   if [ "$(id -u)" -eq 0 ]; then
     chown -R "$steam_user:$steam_user" "${steam_home}/.steam" "${steam_home}/.local" 2>/dev/null || true
   fi
@@ -228,10 +251,7 @@ restore_steam_session_if_available() {
   if ! steam_session_exists; then
     echo "WARNING: Steam session archive restored, but no loginusers.vdf was found in known Steam locations."
     echo "Known locations checked:"
-    echo "  ${steam_home}/.steam/debian-installation/config/loginusers.vdf"
-    echo "  ${steam_home}/.steam/steam/config/loginusers.vdf"
-    echo "  ${steam_home}/.steam/root/config/loginusers.vdf"
-    echo "  ${steam_home}/.local/share/Steam/config/loginusers.vdf"
+    echo "  ${steam_root}/config/loginusers.vdf"
     return 0
   fi
 
@@ -242,7 +262,7 @@ restore_steam_session_if_available() {
 
   echo "Steam session restore marker: ${steam_restore_marker}"
   echo "Steam session files after restore:"
-  find "${steam_home}/.steam" "${steam_home}/.local/share/Steam" \
+  find -L "${steam_home}/.steam" "${steam_home}/.local/share/Steam" \
     \( -name loginusers.vdf -o -name registry.vdf -o -name 'ssfn*' \) \
     -maxdepth 5 -print 2>/dev/null || true
 }
