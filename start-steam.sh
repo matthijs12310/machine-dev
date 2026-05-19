@@ -3,6 +3,7 @@ set -euo pipefail
 
 export DISPLAY="${DISPLAY:-:99}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:${PATH:-}"
 
 default_steam_user="mc"
 if id runner >/dev/null 2>&1; then
@@ -52,8 +53,13 @@ install_steam_installer() {
     curl \
     steam-installer
 
+  hash -r 2>/dev/null || true
+
   if ! command -v steam >/dev/null 2>&1; then
     echo "ERROR: steam command still not found after installing steam-installer."
+    echo "PATH=${PATH}"
+    echo "Steam launcher candidates:"
+    ls -l /usr/games/steam /usr/bin/steam 2>/dev/null || true
     exit 1
   fi
 
@@ -156,6 +162,7 @@ download_steam_session_archive() {
 
 restore_steam_session_if_available() {
   local archive=""
+  local first_entry=""
 
   if [ "$steam_restore_force" != "1" ] && [ -f "$steam_restore_marker" ] && steam_session_exists; then
     echo "Steam session already exists for ${steam_user}; restore skipped."
@@ -174,23 +181,58 @@ restore_steam_session_if_available() {
   echo "Restoring Steam session from: ${archive}"
   mkdir -p "$steam_home"
   echo "Archive size: $(du -h "$archive" 2>/dev/null | awk '{print $1}')"
+  echo "Archive top entries:"
 
   case "$archive" in
     *.tar.zst|*.zst)
       if command -v zstd >/dev/null 2>&1; then
-        tar --zstd -xf "$archive" -C "$steam_home"
+        tar --zstd -tf "$archive" | sed -n '1,12p'
+        first_entry="$(tar --zstd -tf "$archive" | sed -n '1p')"
+        case "$first_entry" in
+          home/*|./home/*)
+            tar --zstd -xf "$archive" -C /
+            ;;
+          *)
+            tar --zstd -xf "$archive" -C "$steam_home"
+            ;;
+        esac
       else
         echo "WARNING: ${archive} needs zstd, but zstd is not installed. Restore skipped."
         return 0
       fi
       ;;
     *)
-      tar -xzf "$archive" -C "$steam_home"
+      tar -tzf "$archive" | sed -n '1,12p'
+      first_entry="$(tar -tzf "$archive" | sed -n '1p')"
+      case "$first_entry" in
+        home/*|./home/*)
+          tar -xzf "$archive" -C /
+          ;;
+        *)
+          tar -xzf "$archive" -C "$steam_home"
+          ;;
+      esac
       ;;
   esac
 
+  if [ -d "${steam_home}/home/${steam_user}/.steam" ] || [ -d "${steam_home}/home/${steam_user}/.local" ]; then
+    echo "Detected nested home restore; moving session files into ${steam_home}"
+    cp -a "${steam_home}/home/${steam_user}/." "$steam_home/"
+    rm -rf "${steam_home}/home"
+  fi
+
   if [ "$(id -u)" -eq 0 ]; then
     chown -R "$steam_user:$steam_user" "${steam_home}/.steam" "${steam_home}/.local" 2>/dev/null || true
+  fi
+
+  if ! steam_session_exists; then
+    echo "WARNING: Steam session archive restored, but no loginusers.vdf was found in known Steam locations."
+    echo "Known locations checked:"
+    echo "  ${steam_home}/.steam/debian-installation/config/loginusers.vdf"
+    echo "  ${steam_home}/.steam/steam/config/loginusers.vdf"
+    echo "  ${steam_home}/.steam/root/config/loginusers.vdf"
+    echo "  ${steam_home}/.local/share/Steam/config/loginusers.vdf"
+    return 0
   fi
 
   touch "$steam_restore_marker" 2>/dev/null || true
