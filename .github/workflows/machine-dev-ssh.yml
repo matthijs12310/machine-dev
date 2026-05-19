@@ -12,7 +12,7 @@ on:
         required: true
         default: "true"
       gaming_stack:
-        description: "Which gaming stack to start: sunshine, wolf, or none"
+        description: "Which gaming stack to start: sunshine, wolf, steam-headless, or none"
         required: true
         type: choice
         default: "none"
@@ -20,6 +20,7 @@ on:
           - none
           - wolf
           - sunshine
+          - steam-headless
 
 permissions:
   contents: read
@@ -209,11 +210,11 @@ jobs:
           sudo mkdir -p /tmp/machine-dev-gaming
 
           case "${GAMING_STACK:-none}" in
-            sunshine|wolf|none)
+            sunshine|wolf|steam-headless|none)
               ;;
             *)
               echo "Unknown gaming_stack: ${GAMING_STACK}"
-              echo "Use: sunshine, wolf, or none"
+              echo "Use: sunshine, wolf, steam-headless, or none"
               exit 1
               ;;
           esac
@@ -249,6 +250,13 @@ jobs:
                   VERIFY_NVIDIA_DOCKER=0 \
                   ./start-machine-dev-wolf.sh
                 ;;
+              steam-headless)
+                env \
+                  STOP_EXISTING_STACKS=1 \
+                  SHOW_LOGS=1 \
+                  FOLLOW_LOGS=0 \
+                  ./start-machine-dev-steam-headless.sh
+                ;;
             esac
           ' 2>&1 | sudo tee /tmp/machine-dev-gaming/launch.log
 
@@ -269,6 +277,7 @@ jobs:
           echo "  cd /root/machine-dev"
           echo "  ./start-machine-dev-gaming.sh"
           echo "  ./start-machine-dev-wolf.sh"
+          echo "  ./start-machine-dev-steam-headless.sh"
           echo "  # For third-party stacks, run the workflow with gaming_stack=none and install/start them manually over SSH."
           echo ""
           echo "Gaming stack logs:"

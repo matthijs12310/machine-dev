@@ -6,6 +6,7 @@ Minimal scripts for a fresh Machine.dev GPU gaming box with NVIDIA Xorg, Sunshin
 
 - `start-machine-dev-gaming.sh` - all-in-one launcher for Xorg, Sunshine, input bridge, and Steam.
 - `start-machine-dev-wolf.sh` - alternative Games on Whales/Wolf stack for Moonlight.
+- `start-machine-dev-steam-headless.sh` - experimental Steam Headless Docker stack.
 - `setup-machine-dev-sunshine.sh` - installs/starts NVIDIA Xorg and Sunshine.
 - `start-input-bridge.sh` + `moonlight-input-bridge.py` - bridges Moonlight passthrough keyboard/mouse into X11.
 - `start-steam.sh` - starts Steam as `runner`/configured user.
@@ -72,7 +73,43 @@ chmod 600 wolf/cfg/key.pem
 
 Then copy or commit `wolf/cfg/` back to your private repo. This contains pairing/auth material, so keep the repo private.
 
-The GitHub Actions workflow starts Wolf by default with `gaming_stack=wolf`. Use `sunshine` for the original stack or `none` to only bring up SSH/Tailscale.
+The GitHub Actions workflow defaults to `gaming_stack=none`, so it only brings up SSH/Tailscale unless you choose `wolf`, `sunshine`, or `steam-headless`.
+
+## Experimental Steam Headless Stack
+
+Use this when you want to try the Steam Headless Docker image instead of the local Sunshine stack or Wolf:
+
+```bash
+cd /root/machine-dev
+./start-machine-dev-steam-headless.sh
+```
+
+The launcher:
+
+- installs Docker Compose if needed
+- writes `/opt/container-services/steam-headless/docker-compose.yml` and `.env`
+- creates persistent data under `/opt/container-data/steam-headless`
+- detects the host NVIDIA driver version
+- downloads the matching Tesla/Data Center NVIDIA `.run` installer into `/home/default/Downloads` inside the container's persistent home
+- starts Steam Headless with noVNC and Sunshine enabled
+
+This cache step matters on Machine.dev/AWS L4 because Steam Headless tries the generic XFree86 NVIDIA URL first, while the matching L4 driver can live under NVIDIA's Tesla/Data Center download path.
+
+Useful commands:
+
+```bash
+cd /opt/container-services/steam-headless
+docker compose logs -f --tail=200
+docker exec -it SteamHeadless bash
+```
+
+Default access:
+
+- noVNC: `http://<tailscale-ip>:8083`
+- Sunshine: `https://<tailscale-ip>:47990`
+- Sunshine login: `admin` / `admin`
+
+The GitHub Actions workflow can also start it directly with `gaming_stack=steam-headless`. Use `gaming_stack=none` if you only want SSH/Tailscale and prefer to start stacks manually.
 
 ## Safer First Boot
 
