@@ -17,12 +17,16 @@ pkill -f "${script_dir}/gamepad-filter-bridge.py" 2>/dev/null || true
 
 echo "Starting gamepad filter bridge"
 echo "Deadzone: ${GAMEPAD_DEADZONE:-9000}"
+echo "Output Hz: ${GAMEPAD_OUTPUT_HZ:-250}"
+echo "Smoothing: ${GAMEPAD_SMOOTHING:-0.65}"
 echo "Log: ${log_file}"
 
 nohup env \
   GAMEPAD_DEADZONE="${GAMEPAD_DEADZONE:-9000}" \
   GAMEPAD_GRAB="${GAMEPAD_GRAB:-1}" \
   GAMEPAD_WAIT_TIMEOUT="${GAMEPAD_WAIT_TIMEOUT:-120}" \
+  GAMEPAD_OUTPUT_HZ="${GAMEPAD_OUTPUT_HZ:-250}" \
+  GAMEPAD_SMOOTHING="${GAMEPAD_SMOOTHING:-0.65}" \
   "${script_dir}/gamepad-filter-bridge.py" \
   >"$log_file" 2>&1 &
 
