@@ -98,12 +98,9 @@ The default launcher mode is `STEAM_HEADLESS_MODE=hybrid`. This is the Machine.d
 - patches the Steam Headless Sunshine/udev Xorg restart-loop workaround
 - starts XFCE, Sunshine, and Steam manually inside the container against host display `:99`
 - starts Steam with `PULSE_SERVER=unix:/tmp/.X11-unix/run/pulse/native`, so game audio reaches Sunshine
-- optionally installs and starts LucidLink when `LUCIDLINK_TOKEN` is set as a GitHub secret
-- keeps LucidLink game payloads on `/mnt/lucidlink/SteamLibrary`, while `compatdata` and `shadercache` are local symlinks
+- uses `/mnt/games/SteamLibrary` as the local Steam game library
 
 This cache step matters on Machine.dev/AWS L4 because Steam Headless tries the generic XFree86 NVIDIA URL first, while the matching L4 driver can live under NVIDIA's Tesla/Data Center download path.
-
-For LucidLink, add a repository secret named `LUCIDLINK_TOKEN`. The workflow input `lucidlink_filespace` defaults to `games.hjghjk`; change it if the filespace changes. The launcher downloads the Linux DEB client, runs `lucid daemon` as `runner`, mounts it with `--fuse-allow-other`, and sets the local cache limit to `25G`.
 
 Useful commands:
 
@@ -130,7 +127,7 @@ docker exec SteamHeadless tail -f /home/default/.cache/log/steam-hostx.log
 
 Use `DISPLAY_REFRESH=144 ./start-machine-dev-steam-headless.sh` to try 144 Hz. The default is 120 Hz because it is more reliable with NVIDIA dummy/VGX modes. Use `STEAM_HEADLESS_MODE=primary` if you want the old all-in-container Steam Headless behavior with noVNC, but Proton/DXVK Vulkan presentation may fail there on Machine.dev L4.
 
-The GitHub Actions workflow can also start it directly with `gaming_stack=steam-headless`. Use `gaming_stack=none` if you only want SSH/Tailscale and prefer to start stacks manually. The workflow keepalive default is 350 minutes.
+The GitHub Actions workflow can also start it directly with `gaming_stack=steam-headless`. Use `gaming_stack=none` if you only want SSH/Tailscale and prefer to start stacks manually. The workflow keepalive default is 350 minutes and the runner disk defaults to 300 GB for local game installs.
 
 ## Safer First Boot
 

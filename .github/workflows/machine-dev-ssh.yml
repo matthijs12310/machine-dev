@@ -21,15 +21,6 @@ on:
           - wolf
           - sunshine
           - steam-headless
-      enable_lucidlink:
-        description: "For steam-headless: install/start LucidLink when token secret is present"
-        required: true
-        default: "true"
-      lucidlink_filespace:
-        description: "For steam-headless: LucidLink filespace"
-        required: false
-        default: "games.hjghjk"
-
 permissions:
   contents: read
 
@@ -41,7 +32,7 @@ jobs:
       - cpu=16
       - regions=eu-south-2
       - tenancy=spot
-      - disk_size=100
+      - disk_size=300
     timeout-minutes: 360
 
     steps:
@@ -202,24 +193,10 @@ jobs:
         if: ${{ github.event.inputs.auto_start_gaming != 'false' }}
         env:
           GAMING_STACK: ${{ github.event.inputs.gaming_stack }}
-          ENABLE_LUCIDLINK_INPUT: ${{ github.event.inputs.enable_lucidlink }}
-          LUCIDLINK_FILESPACE_INPUT: ${{ github.event.inputs.lucidlink_filespace }}
-          LUCIDLINK_TOKEN: ${{ secrets.LUCIDLINK_TOKEN }}
         run: |
           set -euo pipefail
 
           sudo mkdir -p /tmp/machine-dev-gaming
-
-          if [ -n "${LUCIDLINK_TOKEN:-}" ]; then
-            sudo mkdir -p /home/runner/.lucid-secrets
-            printf '%s' "${LUCIDLINK_TOKEN}" | sudo tee /home/runner/.lucid-secrets/service-token >/dev/null
-            sudo chown -R runner:runner /home/runner/.lucid-secrets
-            sudo chmod 700 /home/runner/.lucid-secrets
-            sudo chmod 600 /home/runner/.lucid-secrets/service-token
-            echo "LucidLink token secret staged for runner"
-          else
-            echo "No LUCIDLINK_TOKEN secret set"
-          fi
 
           case "${GAMING_STACK:-none}" in
             sunshine|wolf|steam-headless|none)
@@ -266,13 +243,6 @@ jobs:
                 env \
                   STOP_EXISTING_STACKS=1 \
                   STEAM_HEADLESS_MODE=hybrid \
-                  ENABLE_LUCIDLINK='"${ENABLE_LUCIDLINK_INPUT:-auto}"' \
-                  LUCIDLINK_FILESPACE='"${LUCIDLINK_FILESPACE_INPUT:-games.hjghjk}"' \
-                  LUCIDLINK_TOKEN_FILE=/home/runner/.lucid-secrets/service-token \
-                  LUCIDLINK_HOST_MOUNT=/mnt/lucidlink \
-                  LUCIDLINK_CONTAINER_MOUNT=/mnt/lucidlink \
-                  LUCIDLINK_CACHE_SIZE=25G \
-                  LOCALIZE_LUCIDLINK_STEAM_STATE=1 \
                   DISPLAY_SIZEW=1920 \
                   DISPLAY_SIZEH=1080 \
                   DISPLAY_REFRESH=120 \
