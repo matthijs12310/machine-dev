@@ -1070,6 +1070,7 @@ container_exec_default_detached() {
     -e PROTON_LOG="$ENABLE_PROTON_LOGS" \
     -e PROTON_LOG_DIR="/home/default" \
     -e XDG_RUNTIME_DIR="/tmp/.X11-unix/run" \
+    -e BROWSER="/usr/bin/x-www-browser" \
     -d "$CONTAINER_NAME" \
     bash -lc "$1"
 }
@@ -1167,6 +1168,49 @@ if [ "'"$INSTALL_CONTAINER_BROWSER"'" = "1" ] &&
     apt-get install -y --no-install-recommends xdotool chromium
 fi
 ' || echo "WARNING: container runtime package install inside ${CONTAINER_NAME} failed or timed out"
+}
+
+configure_container_default_browser() {
+  is_hybrid || return 0
+  [ "$INSTALL_CONTAINER_BROWSER" = "1" ] || return 0
+
+  echo "Configuring default browser inside ${CONTAINER_NAME}"
+  docker exec "$CONTAINER_NAME" bash -lc '
+set -e
+
+browser_bin=""
+browser_desktop=""
+if command -v firefox-esr >/dev/null 2>&1; then
+  browser_bin="$(command -v firefox-esr)"
+  browser_desktop="firefox-esr.desktop"
+elif command -v firefox >/dev/null 2>&1; then
+  browser_bin="$(command -v firefox)"
+  browser_desktop="firefox.desktop"
+elif command -v chromium >/dev/null 2>&1; then
+  browser_bin="$(command -v chromium)"
+  browser_desktop="chromium.desktop"
+fi
+
+[ -n "$browser_bin" ] || exit 0
+
+update-alternatives --set x-www-browser "$browser_bin" >/dev/null 2>&1 || true
+update-alternatives --set gnome-www-browser "$browser_bin" >/dev/null 2>&1 || true
+
+su - default -s /bin/bash -c "
+set -e
+mkdir -p ~/.config ~/.local/share/applications
+cat >~/.config/mimeapps.list <<EOF
+[Default Applications]
+text/html=${browser_desktop}
+x-scheme-handler/http=${browser_desktop}
+x-scheme-handler/https=${browser_desktop}
+x-scheme-handler/about=${browser_desktop}
+x-scheme-handler/unknown=${browser_desktop}
+EOF
+ln -sf ~/.config/mimeapps.list ~/.local/share/applications/mimeapps.list
+xdg-settings set default-web-browser ${browser_desktop} >/dev/null 2>&1 || true
+"
+'
 }
 
 set_mouse_passthrough_accel() {
@@ -1468,6 +1512,7 @@ main() {
   if is_hybrid; then
     stop_supervisor_desktop_services
     install_container_runtime_packages
+    configure_container_default_browser
     start_hybrid_container_services
     configure_tailscale_exit_node
     exclude_frp_relay_from_tailscale_exit_node
