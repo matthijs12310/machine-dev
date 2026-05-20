@@ -51,7 +51,8 @@ START_CONTAINER_STEAM="${START_CONTAINER_STEAM:-1}"
 INSTALL_CONTAINER_BROWSER="${INSTALL_CONTAINER_BROWSER:-1}"
 INSTALL_CONTAINER_STEAM_DEPS="${INSTALL_CONTAINER_STEAM_DEPS:-1}"
 AUTO_CLICK_STEAM_INSTALL="${AUTO_CLICK_STEAM_INSTALL:-1}"
-STEAM_SKIP_PACKAGE_CHECK="${STEAM_SKIP_PACKAGE_CHECK:-0}"
+STEAM_SKIP_PACKAGE_CHECK="${STEAM_SKIP_PACKAGE_CHECK:-1}"
+AUTO_ACCEPT_STEAM_INSTALLER="${AUTO_ACCEPT_STEAM_INSTALLER:-1}"
 VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
 ENABLE_DEBUG_VNC="${ENABLE_DEBUG_VNC:-0}"
 HOST_VNC_PORT="${HOST_VNC_PORT:-5901}"
@@ -85,6 +86,14 @@ prepare_local_steam_library() {
   mkdir -p "${library_dir}/steamapps"
   chown -R "${PUID}:${PGID}" "$library_dir" 2>/dev/null || true
   chmod -R ugo+rwX "$library_dir" 2>/dev/null || true
+}
+
+fix_steam_home_ownership() {
+  local steam_home="${DATA_DIR}/home/.steam"
+
+  [ -e "$steam_home" ] || return 0
+  chown -R "${PUID}:${PGID}" "$steam_home" 2>/dev/null || true
+  chmod u+rwX "$steam_home" 2>/dev/null || true
 }
 
 seed_local_steam_library_config() {
@@ -155,7 +164,7 @@ ${games_apps_block}
 EOF
   done
 
-  chown -R "${PUID}:${PGID}" "${steam_root}/steamapps" "${steam_root}/config" 2>/dev/null || true
+  fix_steam_home_ownership
 }
 
 tailscale_ip() {
@@ -774,59 +783,85 @@ wait_for_pulse() {
   docker exec "$CONTAINER_NAME" bash -lc 'find /tmp /run /home/default -maxdepth 4 -type s 2>/dev/null | grep -Ei "pulse|native|audio" || true'
 }
 
-install_container_browser() {
-  [ "$INSTALL_CONTAINER_BROWSER" = "1" ] || return 0
+install_container_runtime_packages() {
+  if [ "$INSTALL_CONTAINER_BROWSER" != "1" ] && [ "$INSTALL_CONTAINER_STEAM_DEPS" != "1" ]; then
+    return 0
+  fi
 
-  echo "Ensuring browser is installed inside ${CONTAINER_NAME}"
-  timeout 240 docker exec "$CONTAINER_NAME" bash -lc '
+  echo "Ensuring container runtime packages are installed inside ${CONTAINER_NAME}"
+  timeout 420 docker exec "$CONTAINER_NAME" bash -lc '
 set -e
-if command -v firefox >/dev/null 2>&1 || command -v firefox-esr >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then
+export DEBIAN_FRONTEND=noninteractive
+
+browser_ready=0
+if command -v firefox >/dev/null 2>&1 ||
+  command -v firefox-esr >/dev/null 2>&1 ||
+  command -v chromium >/dev/null 2>&1; then
+  browser_ready=1
+fi
+
+steam_deps_ready=0
+steam_deps_missing=0
+for pkg in \
+  libc6:i386 libcurl4t64:i386 libvulkan1:i386 libpulse0:i386 \
+  libnss3:i386 libgl1:i386 libx11-6:i386 libstdc++6:i386; do
+  if ! dpkg-query -W -f="\${Status}" "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+    steam_deps_missing=1
+    break
+  fi
+done
+if [ "$steam_deps_missing" = "0" ]; then
+  steam_deps_ready=1
+fi
+
+if { [ "'"$INSTALL_CONTAINER_BROWSER"'" != "1" ] || [ "$browser_ready" = "1" ]; } &&
+  { [ "'"$INSTALL_CONTAINER_STEAM_DEPS"'" != "1" ] || [ "$steam_deps_ready" = "1" ]; }; then
   exit 0
 fi
 
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends xdotool firefox-esr || apt-get install -y --no-install-recommends xdotool chromium
-' || echo "WARNING: browser install inside ${CONTAINER_NAME} failed or timed out"
-}
-
-install_container_steam_deps() {
-  [ "$INSTALL_CONTAINER_STEAM_DEPS" = "1" ] || return 0
-
-  echo "Ensuring Steam bootstrap dependencies are installed inside ${CONTAINER_NAME}"
-  timeout 300 docker exec "$CONTAINER_NAME" bash -lc '
-set -e
-export DEBIAN_FRONTEND=noninteractive
-
-dpkg --add-architecture i386 2>/dev/null || true
-apt-get update
-pick_pkg() {
-  for pkg in "$@"; do
-    if apt-cache show "$pkg" >/dev/null 2>&1; then
-      printf "%s\n" "$pkg"
-      return 0
-    fi
-  done
-  return 1
-}
-asound_pkg="$(pick_pkg libasound2t64:i386 libasound2:i386 || printf "libasound2:i386")"
-curl_pkg="$(pick_pkg libcurl4t64:i386 libcurl4:i386 || printf "libcurl4:i386")"
-apt-get install -y --no-install-recommends \
-  ca-certificates curl file xdg-user-dirs xdg-utils \
-  "$asound_pkg" libc6:i386 "$curl_pkg" libdbus-1-3:i386 \
-  libdrm2:i386 libegl1:i386 libgbm1:i386 libgcc-s1:i386 libgl1:i386 \
-  libglvnd0:i386 libglx0:i386 libnm0:i386 libnss3:i386 libpulse0:i386 \
-  libstdc++6:i386 libudev1:i386 libvulkan1:i386 libx11-6:i386 \
-  libxcb-dri3-0:i386 libxcb1:i386 libxcomposite1:i386 libxdamage1:i386 \
-  libxext6:i386 libxfixes3:i386 libxrandr2:i386 libxrender1:i386 \
-  libxtst6:i386
-
-if command -v steamdeps >/dev/null 2>&1; then
-  yes y | steamdeps >/tmp/machine-dev-steamdeps.log 2>&1 || true
-elif [ -x /usr/lib/steam/steamdeps ]; then
-  yes y | /usr/lib/steam/steamdeps >/tmp/machine-dev-steamdeps.log 2>&1 || true
+if [ "'"$INSTALL_CONTAINER_STEAM_DEPS"'" = "1" ]; then
+  dpkg --add-architecture i386 2>/dev/null || true
 fi
-' || echo "WARNING: Steam dependency install inside ${CONTAINER_NAME} failed or timed out"
+
+apt-get update
+
+if [ "'"$INSTALL_CONTAINER_STEAM_DEPS"'" = "1" ]; then
+  pick_pkg() {
+    for pkg in "$@"; do
+      if apt-cache show "$pkg" >/dev/null 2>&1; then
+        printf "%s\n" "$pkg"
+        return 0
+      fi
+    done
+    return 1
+  }
+  asound_pkg="$(pick_pkg libasound2t64:i386 libasound2:i386 || printf "libasound2:i386")"
+  curl_pkg="$(pick_pkg libcurl4t64:i386 libcurl4:i386 || printf "libcurl4:i386")"
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl file xdg-user-dirs xdg-utils \
+    "$asound_pkg" libc6:i386 "$curl_pkg" libdbus-1-3:i386 \
+    libdrm2:i386 libegl1:i386 libgbm1:i386 libgcc-s1:i386 libgl1:i386 \
+    libglvnd0:i386 libglx0:i386 libnm0:i386 libnss3:i386 libpulse0:i386 \
+    libstdc++6:i386 libudev1:i386 libvulkan1:i386 libx11-6:i386 \
+    libxcb-dri3-0:i386 libxcb1:i386 libxcomposite1:i386 libxdamage1:i386 \
+    libxext6:i386 libxfixes3:i386 libxrandr2:i386 libxrender1:i386 \
+    libxtst6:i386
+
+  if command -v steamdeps >/dev/null 2>&1; then
+    yes y | steamdeps >/tmp/machine-dev-steamdeps.log 2>&1 || true
+  elif [ -x /usr/lib/steam/steamdeps ]; then
+    yes y | /usr/lib/steam/steamdeps >/tmp/machine-dev-steamdeps.log 2>&1 || true
+  fi
+fi
+
+if [ "'"$INSTALL_CONTAINER_BROWSER"'" = "1" ] &&
+  ! command -v firefox >/dev/null 2>&1 &&
+  ! command -v firefox-esr >/dev/null 2>&1 &&
+  ! command -v chromium >/dev/null 2>&1; then
+  apt-get install -y --no-install-recommends xdotool firefox-esr ||
+    apt-get install -y --no-install-recommends xdotool chromium
+fi
+' || echo "WARNING: container runtime package install inside ${CONTAINER_NAME} failed or timed out"
 }
 
 set_mouse_passthrough_accel() {
@@ -926,12 +961,14 @@ touch \"\$d/SteamLibrary/.machine-dev-write-test\" 2>/dev/null && rm -f \"\$d/St
 " >>"${LOG_DIR}/hybrid-post-start.log" 2>&1 || true
 
   if [ "$START_CONTAINER_STEAM" = "1" ]; then
+    docker exec "$CONTAINER_NAME" bash -lc 'chown -R default:default /home/default/.steam /home/default/.local /home/default/.cache 2>/dev/null || true'
     docker exec "$CONTAINER_NAME" bash -lc 'pkill -9 -u default -f "steam|steamwebhelper" 2>/dev/null || true'
     container_exec_default_detached '
 mkdir -p /home/default/.cache/log
 pactl set-default-sink sink-sunshine-stereo 2>/dev/null || true
 pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || true
 export PULSE_SINK=sink-sunshine-stereo
+export GTK_A11Y=none
 if [ "'"$STEAM_SKIP_PACKAGE_CHECK"'" = "1" ]; then
   export STEAM_SKIP_PACKAGE_CHECK=1
 else
@@ -941,6 +978,15 @@ echo "PULSE_SERVER=${PULSE_SERVER}" >/home/default/.cache/log/steam-hostx-env.lo
 echo "PULSE_SINK=${PULSE_SINK}" >>/home/default/.cache/log/steam-hostx-env.log
 echo "STEAM_COMPAT_MOUNTS=${STEAM_COMPAT_MOUNTS}" >>/home/default/.cache/log/steam-hostx-env.log
 echo "STEAM_SKIP_PACKAGE_CHECK=${STEAM_SKIP_PACKAGE_CHECK:-<unset>}" >>/home/default/.cache/log/steam-hostx-env.log
+echo "GTK_A11Y=${GTK_A11Y}" >>/home/default/.cache/log/steam-hostx-env.log
+if [ "'"$AUTO_ACCEPT_STEAM_INSTALLER"'" = "1" ]; then
+  mkdir -p /tmp/machine-dev-steam-bin
+  printf "%s\n" "#!/usr/bin/env sh" "exit 0" >/tmp/machine-dev-steam-bin/zenity
+  printf "%s\n" "#!/usr/bin/env sh" "exit 0" >/tmp/machine-dev-steam-bin/yad
+  chmod +x /tmp/machine-dev-steam-bin/zenity /tmp/machine-dev-steam-bin/yad
+  export PATH="/tmp/machine-dev-steam-bin:${PATH}"
+  echo "AUTO_ACCEPT_STEAM_INSTALLER=1" >>/home/default/.cache/log/steam-hostx-env.log
+fi
 if [ "'"$AUTO_CLICK_STEAM_INSTALL"'" = "1" ] && command -v xdotool >/dev/null 2>&1; then
   (
     for _ in $(seq 1 180); do
@@ -1097,8 +1143,7 @@ main() {
 
   if is_hybrid; then
     stop_supervisor_desktop_services
-    install_container_browser
-    install_container_steam_deps
+    install_container_runtime_packages
     start_hybrid_container_services
     start_debug_vnc
   fi

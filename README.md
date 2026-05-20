@@ -129,6 +129,23 @@ Use `DISPLAY_REFRESH=144 ./start-machine-dev-steam-headless.sh` to try 144 Hz. T
 
 The GitHub Actions workflow can also start it directly with `gaming_stack=steam-headless`. Use `gaming_stack=none` if you only want SSH/Tailscale and prefer to start stacks manually. The workflow keepalive default is 350 minutes and the runner disk defaults to 300 GB for local game installs.
 
+### Faster Steam Headless Image
+
+The repo includes `steam-headless-machine-dev.Dockerfile`, which extends `josh5/steam-headless:latest` with Firefox/Chromium helpers and the Steam i386 bootstrap dependencies. This keeps Steam Headless behavior intact while avoiding most container `apt` work on each fresh Machine.dev instance.
+
+Build and publish it from GitHub Actions by running the `Build Steam Headless image` workflow. The SSH workflow uses this image automatically for `gaming_stack=steam-headless`:
+
+```text
+ghcr.io/<owner>/<repo>/steam-headless-machine-dev:latest
+```
+
+For manual runs, pass the image explicitly:
+
+```bash
+STEAM_HEADLESS_IMAGE=ghcr.io/<owner>/<repo>/steam-headless-machine-dev:latest \
+  ./start-machine-dev-steam-headless.sh
+```
+
 ## Safer First Boot
 
 Use this if you want to bring up Sunshine/Xorg first and start Steam manually after you verify Moonlight connects:

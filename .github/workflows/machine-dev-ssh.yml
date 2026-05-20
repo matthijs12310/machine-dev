@@ -23,6 +23,7 @@ on:
           - steam-headless
 permissions:
   contents: read
+  packages: read
 
 jobs:
   ssh:
@@ -193,6 +194,8 @@ jobs:
         if: ${{ github.event.inputs.auto_start_gaming != 'false' }}
         env:
           GAMING_STACK: ${{ github.event.inputs.gaming_stack }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -214,6 +217,17 @@ jobs:
           fi
 
           echo "Starting Machine.dev ${GAMING_STACK:-none} stack automatically"
+          steam_headless_image="ghcr.io/${GITHUB_REPOSITORY}/steam-headless-machine-dev:latest"
+          steam_headless_image="$(printf '%s' "$steam_headless_image" | tr '[:upper:]' '[:lower:]')"
+          if [ "${GAMING_STACK:-none}" = "steam-headless" ]; then
+            echo "${GITHUB_TOKEN}" | sudo docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            if sudo docker pull "${steam_headless_image}"; then
+              echo "Using Steam Headless image: ${steam_headless_image}"
+            else
+              echo "Custom Steam Headless image is not available yet; falling back to josh5/steam-headless:latest"
+              steam_headless_image="josh5/steam-headless:latest"
+            fi
+          fi
           sudo bash -lc '
             set -euo pipefail
             cd /root/machine-dev
@@ -243,6 +257,9 @@ jobs:
                 env \
                   STOP_EXISTING_STACKS=1 \
                   STEAM_HEADLESS_MODE=hybrid \
+                  STEAM_HEADLESS_IMAGE="'"${steam_headless_image}"'" \
+                  INSTALL_CONTAINER_BROWSER=1 \
+                  INSTALL_CONTAINER_STEAM_DEPS=1 \
                   DISPLAY_SIZEW=1920 \
                   DISPLAY_SIZEH=1080 \
                   DISPLAY_REFRESH=120 \
