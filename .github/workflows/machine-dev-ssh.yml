@@ -213,6 +213,9 @@ jobs:
           GAMING_STACK: ${{ github.event.inputs.gaming_stack }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          FRP_RELAY_HOST: ${{ secrets.FRP_RELAY_HOST }}
+          FRP_RELAY_PORT: ${{ secrets.FRP_RELAY_PORT }}
+          FRP_TOKEN: ${{ secrets.FRP_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -245,7 +248,11 @@ jobs:
               steam_headless_image="josh5/steam-headless:latest"
             fi
           fi
-          sudo bash -lc '
+          sudo env \
+            FRP_RELAY_HOST="${FRP_RELAY_HOST:-}" \
+            FRP_RELAY_PORT="${FRP_RELAY_PORT:-443}" \
+            FRP_TOKEN="${FRP_TOKEN:-}" \
+            bash -lc '
             set -euo pipefail
             cd /root/machine-dev
             case "'"${GAMING_STACK:-none}"'" in
@@ -275,6 +282,10 @@ jobs:
                   STOP_EXISTING_STACKS=1 \
                   STEAM_HEADLESS_MODE=hybrid \
                   STEAM_HEADLESS_IMAGE="'"${steam_headless_image}"'" \
+                  ENABLE_FRP_SUNSHINE_RELAY="$([ -n "${FRP_RELAY_HOST:-}" ] && [ -n "${FRP_TOKEN:-}" ] && printf 1 || printf 0)" \
+                  FRP_RELAY_HOST="${FRP_RELAY_HOST:-}" \
+                  FRP_RELAY_PORT="${FRP_RELAY_PORT:-443}" \
+                  FRP_TOKEN="${FRP_TOKEN:-}" \
                   INSTALL_CONTAINER_BROWSER=1 \
                   INSTALL_CONTAINER_STEAM_DEPS=1 \
                   DISPLAY_SIZEW=1920 \

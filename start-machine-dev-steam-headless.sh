@@ -69,6 +69,22 @@ ENABLE_PROTON_LOGS="${ENABLE_PROTON_LOGS:-0}"
 WAIT_FOR_SUPERVISOR_SECONDS="${WAIT_FOR_SUPERVISOR_SECONDS:-20}"
 WAIT_FOR_PULSE_SECONDS="${WAIT_FOR_PULSE_SECONDS:-25}"
 
+ENABLE_FRP_SUNSHINE_RELAY="${ENABLE_FRP_SUNSHINE_RELAY:-0}"
+FRP_VERSION="${FRP_VERSION:-0.68.1}"
+FRP_RELAY_HOST="${FRP_RELAY_HOST:-}"
+FRP_RELAY_PORT="${FRP_RELAY_PORT:-443}"
+FRP_TOKEN="${FRP_TOKEN:-}"
+FRP_SERVICE_NAME="${FRP_SERVICE_NAME:-frpc-sunshine}"
+FRP_CONFIG_DIR="${FRP_CONFIG_DIR:-/etc/frp}"
+FRP_REMOTE_PORT_47984="${FRP_REMOTE_PORT_47984:-47984}"
+FRP_REMOTE_PORT_47989="${FRP_REMOTE_PORT_47989:-47989}"
+FRP_REMOTE_PORT_47990="${FRP_REMOTE_PORT_47990:-47990}"
+FRP_REMOTE_PORT_48010="${FRP_REMOTE_PORT_48010:-48010}"
+FRP_REMOTE_PORT_47998="${FRP_REMOTE_PORT_47998:-47998}"
+FRP_REMOTE_PORT_47999="${FRP_REMOTE_PORT_47999:-47999}"
+FRP_REMOTE_PORT_48000="${FRP_REMOTE_PORT_48000:-48000}"
+FRP_REMOTE_PORT_48002="${FRP_REMOTE_PORT_48002:-48002}"
+
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
     echo "Run as root: sudo $0"
@@ -254,10 +270,169 @@ install_basics() {
   fi
 }
 
+frp_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l) echo arm ;;
+    *)
+      echo "ERROR: unsupported FRP architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+install_frp_client() {
+  [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] || return 0
+
+  if command -v frpc >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local arch
+  local archive
+  local url
+  local tmpdir
+  arch="$(frp_arch)"
+  archive="frp_${FRP_VERSION}_linux_${arch}.tar.gz"
+  url="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${archive}"
+  tmpdir="$(mktemp -d)"
+
+  echo "Installing FRP client ${FRP_VERSION} (${arch})"
+  curl -fL --retry 3 --retry-delay 2 -o "${tmpdir}/${archive}" "$url"
+  tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
+  install -m 0755 "${tmpdir}/frp_${FRP_VERSION}_linux_${arch}/frpc" /usr/local/bin/frpc
+  rm -rf "$tmpdir"
+}
+
+write_frp_sunshine_relay_config() {
+  [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] || return 0
+
+  local relay_host
+  local relay_token
+  relay_host="$(printf '%s' "$FRP_RELAY_HOST" | tr -d '\r\n')"
+  relay_token="$(printf '%s' "$FRP_TOKEN" | tr -d '\r\n')"
+
+  if [ -z "$relay_host" ] || [ -z "$relay_token" ]; then
+    echo "WARNING: ENABLE_FRP_SUNSHINE_RELAY=1 but FRP_RELAY_HOST or FRP_TOKEN is empty; skipping FRP relay"
+    return 0
+  fi
+
+  mkdir -p "$FRP_CONFIG_DIR"
+  chmod 700 "$FRP_CONFIG_DIR" 2>/dev/null || true
+
+  cat >"${FRP_CONFIG_DIR}/frpc-sunshine.env" <<EOF
+FRP_TOKEN=${relay_token}
+EOF
+  chmod 600 "${FRP_CONFIG_DIR}/frpc-sunshine.env"
+
+  cat >"${FRP_CONFIG_DIR}/frpc-sunshine.toml" <<EOF
+serverAddr = "${relay_host}"
+serverPort = ${FRP_RELAY_PORT}
+
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_TOKEN }}"
+
+loginFailExit = false
+transport.tcpMux = true
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_47984}-tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 47984
+remotePort = ${FRP_REMOTE_PORT_47984}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_47989}-tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 47989
+remotePort = ${FRP_REMOTE_PORT_47989}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_47990}-tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 47990
+remotePort = ${FRP_REMOTE_PORT_47990}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_48010}-tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 48010
+remotePort = ${FRP_REMOTE_PORT_48010}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_47998}-udp"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 47998
+remotePort = ${FRP_REMOTE_PORT_47998}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_47999}-udp"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 47999
+remotePort = ${FRP_REMOTE_PORT_47999}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_48000}-udp"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 48000
+remotePort = ${FRP_REMOTE_PORT_48000}
+
+[[proxies]]
+name = "sunshine-${FRP_REMOTE_PORT_48002}-udp"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 48002
+remotePort = ${FRP_REMOTE_PORT_48002}
+EOF
+
+  cat >"/etc/systemd/system/${FRP_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=FRP Sunshine reverse relay client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=${FRP_CONFIG_DIR}/frpc-sunshine.env
+ExecStart=/usr/local/bin/frpc -c ${FRP_CONFIG_DIR}/frpc-sunshine.toml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+start_frp_sunshine_relay() {
+  [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] || return 0
+
+  if [ -z "$FRP_RELAY_HOST" ] || [ -z "$FRP_TOKEN" ]; then
+    return 0
+  fi
+
+  install_frp_client
+  write_frp_sunshine_relay_config
+
+  echo "Starting FRP Sunshine relay client to ${FRP_RELAY_HOST}:${FRP_RELAY_PORT}"
+  systemctl daemon-reload
+  systemctl enable --now "$FRP_SERVICE_NAME"
+  systemctl restart "$FRP_SERVICE_NAME"
+  sleep 1
+  systemctl status "$FRP_SERVICE_NAME" --no-pager || true
+}
+
 stop_existing_stacks() {
   [ "$STOP_EXISTING_STACKS" = "1" ] || return 0
 
   echo "Stopping existing Wolf/Sunshine/Xorg/Steam processes that may conflict"
+  systemctl stop "$FRP_SERVICE_NAME" 2>/dev/null || true
   docker rm -f wolf WolfPulseAudio 2>/dev/null || true
   docker ps -a --format '{{.Names}}' | awk '/^Wolf/{print}' | xargs -r docker rm -f 2>/dev/null || true
   pkill sunshine 2>/dev/null || true
@@ -1136,6 +1311,14 @@ print_status() {
       echo "noVNC: http://<host-ip>:${PORT_NOVNC_WEB}"
     fi
   fi
+  if [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] && [ -n "$FRP_RELAY_HOST" ]; then
+    echo
+    echo "FRP Sunshine relay:"
+    echo "  Moonlight host: ${FRP_RELAY_HOST}"
+    echo "  control port:   ${FRP_RELAY_PORT}"
+    echo "  service:        ${FRP_SERVICE_NAME}"
+    echo "  logs:           journalctl -u ${FRP_SERVICE_NAME} -f"
+  fi
   echo
   echo "Quick checks:"
   if is_hybrid; then
@@ -1198,6 +1381,7 @@ main() {
     stop_supervisor_desktop_services
     install_container_runtime_packages
     start_hybrid_container_services
+    start_frp_sunshine_relay
     start_debug_vnc
   fi
 
