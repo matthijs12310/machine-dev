@@ -69,6 +69,11 @@ ENABLE_PROTON_LOGS="${ENABLE_PROTON_LOGS:-0}"
 WAIT_FOR_SUPERVISOR_SECONDS="${WAIT_FOR_SUPERVISOR_SECONDS:-20}"
 WAIT_FOR_PULSE_SECONDS="${WAIT_FOR_PULSE_SECONDS:-25}"
 
+TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-}"
+TAILSCALE_EXIT_NODE_ALLOW_LAN="${TAILSCALE_EXIT_NODE_ALLOW_LAN:-1}"
+TAILSCALE_EXIT_NODE_ACCEPT_ROUTES="${TAILSCALE_EXIT_NODE_ACCEPT_ROUTES:-1}"
+TAILSCALE_EXIT_NODE_EXCLUDE_FRP_RELAY="${TAILSCALE_EXIT_NODE_EXCLUDE_FRP_RELAY:-1}"
+
 ENABLE_FRP_SUNSHINE_RELAY="${ENABLE_FRP_SUNSHINE_RELAY:-0}"
 FRP_VERSION="${FRP_VERSION:-0.68.1}"
 FRP_RELAY_HOST="${FRP_RELAY_HOST:-}"
@@ -188,6 +193,78 @@ tailscale_ip() {
   tailscale --socket=/run/tailscale/tailscaled.sock ip -4 2>/dev/null | head -1 && return 0
   tailscale --socket=/tmp/tailscaled.sock ip -4 2>/dev/null | head -1 && return 0
   true
+}
+
+resolve_ipv4s() {
+  local host="$1"
+
+  if printf '%s\n' "$host" | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then
+    printf '%s\n' "$host"
+    return 0
+  fi
+
+  getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u
+}
+
+configure_tailscale_exit_node() {
+  [ -n "$TAILSCALE_EXIT_NODE" ] || return 0
+
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "WARNING: TAILSCALE_EXIT_NODE=${TAILSCALE_EXIT_NODE}, but tailscale is not installed"
+    return 0
+  fi
+
+  local allow_lan="false"
+  local accept_routes="false"
+  local up_args=(--exit-node="$TAILSCALE_EXIT_NODE" --ssh=false)
+
+  [ "$TAILSCALE_EXIT_NODE_ALLOW_LAN" = "1" ] && allow_lan="true"
+  [ "$TAILSCALE_EXIT_NODE_ACCEPT_ROUTES" = "1" ] && accept_routes="true"
+
+  if [ "$TAILSCALE_EXIT_NODE_ALLOW_LAN" = "1" ]; then
+    up_args+=(--exit-node-allow-lan-access)
+  fi
+  if [ "$TAILSCALE_EXIT_NODE_ACCEPT_ROUTES" = "1" ]; then
+    up_args+=(--accept-routes)
+  fi
+
+  echo "Setting Tailscale exit node to ${TAILSCALE_EXIT_NODE}"
+  if tailscale set \
+    --exit-node="$TAILSCALE_EXIT_NODE" \
+    --exit-node-allow-lan-access="$allow_lan" \
+    --accept-routes="$accept_routes" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  tailscale up "${up_args[@]}" >/dev/null 2>&1 ||
+    echo "WARNING: unable to set Tailscale exit node ${TAILSCALE_EXIT_NODE}"
+}
+
+exclude_frp_relay_from_tailscale_exit_node() {
+  [ "$TAILSCALE_EXIT_NODE_EXCLUDE_FRP_RELAY" = "1" ] || return 0
+  [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] || return 0
+  [ -n "$FRP_RELAY_HOST" ] || return 0
+
+  local default_route
+  local gw
+  local dev
+  default_route="$(ip route show table main default 2>/dev/null | awk '$0 !~ /tailscale0/ {print; exit}')"
+  [ -n "$default_route" ] || return 0
+
+  gw="$(printf '%s\n' "$default_route" | awk '{for (i=1; i<=NF; i++) if ($i=="via") {print $(i+1); exit}}')"
+  dev="$(printf '%s\n' "$default_route" | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
+  [ -n "$dev" ] || return 0
+
+  local ip
+  while IFS= read -r ip; do
+    [ -n "$ip" ] || continue
+    echo "Keeping FRP relay ${ip} off Tailscale exit node via ${dev}${gw:+/${gw}}"
+    if [ -n "$gw" ]; then
+      ip route replace "${ip}/32" via "$gw" dev "$dev" table 52 2>/dev/null || true
+    else
+      ip route replace "${ip}/32" dev "$dev" table 52 2>/dev/null || true
+    fi
+  done < <(resolve_ipv4s "$FRP_RELAY_HOST")
 }
 
 install_basics() {
@@ -1319,6 +1396,17 @@ print_status() {
     echo "  service:        ${FRP_SERVICE_NAME}"
     echo "  logs:           journalctl -u ${FRP_SERVICE_NAME} -f"
   fi
+  if [ -n "$TAILSCALE_EXIT_NODE" ]; then
+    echo
+    echo "Tailscale exit node:"
+    echo "  node:           ${TAILSCALE_EXIT_NODE}"
+    echo "  allow LAN:      ${TAILSCALE_EXIT_NODE_ALLOW_LAN}"
+    echo "  FRP bypass:     ${TAILSCALE_EXIT_NODE_EXCLUDE_FRP_RELAY}"
+    if [ -n "$FRP_RELAY_HOST" ]; then
+      echo "  check relay:    ip route get ${FRP_RELAY_HOST}"
+    fi
+    echo "  check public:   curl -4 ifconfig.me"
+  fi
   echo
   echo "Quick checks:"
   if is_hybrid; then
@@ -1381,6 +1469,8 @@ main() {
     stop_supervisor_desktop_services
     install_container_runtime_packages
     start_hybrid_container_services
+    configure_tailscale_exit_node
+    exclude_frp_relay_from_tailscale_exit_node
     start_frp_sunshine_relay
     start_debug_vnc
   fi
