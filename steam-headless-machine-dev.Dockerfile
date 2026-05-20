@@ -18,7 +18,6 @@ RUN set -eux; \
     curl_pkg="$(pick_pkg libcurl4t64:i386 libcurl4:i386 || printf "libcurl4:i386")"; \
     apt-get install -y --no-install-recommends \
       ca-certificates \
-      chromium \
       curl \
       file \
       firefox-esr \

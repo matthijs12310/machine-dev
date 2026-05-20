@@ -176,19 +176,72 @@ tailscale_ip() {
 
 install_basics() {
   export DEBIAN_FRONTEND=noninteractive
+  local packages=()
+  local need_update=0
 
-  apt-get update
-  apt-get install -y --no-install-recommends \
-    ca-certificates curl git docker.io docker-compose containerd fuse3
+  add_pkg_if_missing() {
+    local binary="$1"
+    shift
+
+    if ! command -v "$binary" >/dev/null 2>&1; then
+      packages+=("$@")
+    fi
+  }
+
+  add_file_pkg_if_missing() {
+    local path="$1"
+    shift
+
+    if [ ! -e "$path" ]; then
+      packages+=("$@")
+    fi
+  }
+
+  add_pkg_if_missing curl ca-certificates curl
+  add_pkg_if_missing git git
+  add_file_pkg_if_missing /bin/fusermount3 fuse3
+
+  if ! command -v docker >/dev/null 2>&1; then
+    packages+=(docker.io containerd)
+  fi
+
+  if command -v docker >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+    packages+=(docker-compose-plugin)
+  fi
 
   if is_hybrid; then
-    apt-get install -y --no-install-recommends \
-      dbus-x11 pulseaudio-utils vulkan-tools x11-utils x11-xserver-utils \
-      xinput xinit xserver-xorg-core xserver-xorg-input-evdev xserver-xorg-input-libinput
+    add_pkg_if_missing dbus-run-session dbus-x11
+    add_pkg_if_missing pactl pulseaudio-utils
+    add_pkg_if_missing vulkaninfo vulkan-tools
+    add_pkg_if_missing xrandr x11-xserver-utils
+    add_pkg_if_missing xdpyinfo x11-utils
+    add_pkg_if_missing xinput xinput
+    add_pkg_if_missing xinit xinit
+    add_pkg_if_missing Xorg xserver-xorg-core
+    add_file_pkg_if_missing /usr/lib/xorg/modules/input/evdev_drv.so xserver-xorg-input-evdev
+    add_file_pkg_if_missing /usr/lib/xorg/modules/input/libinput_drv.so xserver-xorg-input-libinput
 
     if [ "$ENABLE_DEBUG_VNC" = "1" ]; then
-      apt-get install -y --no-install-recommends x11vnc
+      add_pkg_if_missing x11vnc x11vnc
     fi
+  fi
+
+  if [ "${#packages[@]}" -gt 0 ]; then
+    need_update=1
+  fi
+
+  if [ "$need_update" = "1" ]; then
+    apt-get update
+    if ! apt-get install -y --no-install-recommends "${packages[@]}"; then
+      if printf '%s\n' "${packages[@]}" | grep -qx docker-compose-plugin; then
+        packages=("${packages[@]/docker-compose-plugin/docker-compose}")
+        apt-get install -y --no-install-recommends "${packages[@]}"
+      else
+        return 1
+      fi
+    fi
+  else
+    echo "Host packages already available; skipping apt install"
   fi
 
   if command -v systemctl >/dev/null 2>&1; then
