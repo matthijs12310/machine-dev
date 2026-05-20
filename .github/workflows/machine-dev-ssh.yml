@@ -130,6 +130,23 @@ jobs:
             --ssh=false \
             --accept-routes
 
+      - name: Preinstall Steam Headless host packages
+        if: ${{ github.event.inputs.auto_start_gaming != 'false' && github.event.inputs.gaming_stack == 'steam-headless' }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            dbus-x11 \
+            pulseaudio-utils \
+            vulkan-tools \
+            x11-utils \
+            x11-xserver-utils \
+            xinput \
+            xinit \
+            xserver-xorg-core \
+            xserver-xorg-input-evdev \
+            xserver-xorg-input-libinput
+
       - name: Setup SSH
         env:
           SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}

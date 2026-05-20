@@ -133,6 +133,8 @@ The GitHub Actions workflow can also start it directly with `gaming_stack=steam-
 
 The repo includes `steam-headless-machine-dev.Dockerfile`, which extends `josh5/steam-headless:latest` with Firefox/Chromium helpers and the Steam i386 bootstrap dependencies. This keeps Steam Headless behavior intact while avoiding most container `apt` work on each fresh Machine.dev instance.
 
+This only speeds up packages that belong inside the Steam Headless container. The host still needs Xorg/Vulkan/input utilities for the hybrid `:99` display path, so the SSH workflow preinstalls those host packages before launching the stack.
+
 Build and publish it from GitHub Actions by running the `Build Steam Headless image` workflow. The SSH workflow uses this image automatically for `gaming_stack=steam-headless`:
 
 ```text
