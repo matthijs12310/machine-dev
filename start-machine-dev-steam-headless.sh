@@ -59,6 +59,20 @@ PULSE_SERVER_PATH="${PULSE_SERVER_PATH:-/tmp/.X11-unix/run/pulse/native}"
 LUCIDLINK_HOST_MOUNT="${LUCIDLINK_HOST_MOUNT:-/mnt/lucidlink}"
 LUCIDLINK_CONTAINER_MOUNT="${LUCIDLINK_CONTAINER_MOUNT:-/mnt/lucidlink}"
 MOUNT_LUCIDLINK="${MOUNT_LUCIDLINK:-auto}" # auto, 1, or 0
+ENABLE_LUCIDLINK="${ENABLE_LUCIDLINK:-auto}" # auto, 1, or 0
+LUCIDLINK_FILESPACE="${LUCIDLINK_FILESPACE:-games.hjghjk}"
+LUCIDLINK_ROOT_PATH="${LUCIDLINK_ROOT_PATH:-/var/lib/lucidlink}"
+LUCIDLINK_RUN_USER="${LUCIDLINK_RUN_USER:-runner}"
+LUCIDLINK_TOKEN_FILE="${LUCIDLINK_TOKEN_FILE:-/home/${LUCIDLINK_RUN_USER}/.lucid-secrets/service-token}"
+LUCIDLINK_INSTALL_URL="${LUCIDLINK_INSTALL_URL:-https://www.lucidlink.com/download/new-ll-latest/linux-deb/stable/}"
+LUCIDLINK_WAIT_SECONDS="${LUCIDLINK_WAIT_SECONDS:-90}"
+LUCIDLINK_CACHE_SIZE="${LUCIDLINK_CACHE_SIZE:-25G}"
+STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:-/mnt/games}"
+FIX_LUCIDLINK_PERMISSIONS="${FIX_LUCIDLINK_PERMISSIONS:-0}"
+LOCALIZE_LUCIDLINK_STEAM_STATE="${LOCALIZE_LUCIDLINK_STEAM_STATE:-1}"
+ENABLE_PROTON_LOGS="${ENABLE_PROTON_LOGS:-0}"
+WAIT_FOR_SUPERVISOR_SECONDS="${WAIT_FOR_SUPERVISOR_SECONDS:-45}"
+WAIT_FOR_PULSE_SECONDS="${WAIT_FOR_PULSE_SECONDS:-25}"
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -69,6 +83,235 @@ need_root() {
 
 is_hybrid() {
   [ "$STEAM_HEADLESS_MODE" = "hybrid" ]
+}
+
+should_enable_lucidlink() {
+  case "$ENABLE_LUCIDLINK" in
+    1|true|yes) return 0 ;;
+    0|false|no) return 1 ;;
+  esac
+
+  [ -n "${LUCIDLINK_TOKEN:-}" ] || [ -s "$LUCIDLINK_TOKEN_FILE" ]
+}
+
+prepare_lucidlink_steam_library() {
+  [ "$MOUNT_LUCIDLINK" != "0" ] || return 0
+  [ -d "$LUCIDLINK_HOST_MOUNT" ] || return 0
+
+  local library_dir="${LUCIDLINK_HOST_MOUNT}/SteamLibrary"
+  local owner_uid owner_gid owner_user
+
+  owner_uid="$(stat -c '%u' "$LUCIDLINK_HOST_MOUNT" 2>/dev/null || echo 0)"
+  owner_gid="$(stat -c '%g' "$LUCIDLINK_HOST_MOUNT" 2>/dev/null || echo 0)"
+  owner_user="$(getent passwd "$owner_uid" | cut -d: -f1 || true)"
+
+  if [ -n "$owner_user" ] && [ "$owner_uid" != "0" ]; then
+    runuser -u "$owner_user" -- mkdir -p "$library_dir" 2>/dev/null || true
+    runuser -u "$owner_user" -- mkdir -p "${library_dir}/steamapps" 2>/dev/null || true
+    chmod 777 "$library_dir" 2>/dev/null || true
+    chmod 777 "${library_dir}/steamapps" 2>/dev/null || true
+  else
+    mkdir -p "$library_dir" 2>/dev/null || true
+    mkdir -p "${library_dir}/steamapps" 2>/dev/null || true
+    chmod 777 "$library_dir" 2>/dev/null || true
+    chmod 777 "${library_dir}/steamapps" 2>/dev/null || true
+  fi
+
+  if [ -d "$library_dir" ]; then
+    echo "LucidLink Steam library prepared: ${library_dir} ($(stat -c '%U:%G %a' "$library_dir" 2>/dev/null || true))"
+    if [ "$FIX_LUCIDLINK_PERMISSIONS" = "1" ]; then
+      echo "Making LucidLink Steam library writable for Steam container user"
+      chmod -R ugo+rwX "$library_dir" 2>/dev/null || true
+    fi
+  else
+    echo "WARNING: could not create LucidLink Steam library at ${library_dir}"
+  fi
+}
+
+configure_lucidlink_cache() {
+  should_enable_lucidlink || return 0
+  [ -n "$LUCIDLINK_CACHE_SIZE" ] || return 0
+
+  echo "Setting LucidLink local cache limit to ${LUCIDLINK_CACHE_SIZE}"
+  runuser -u "$LUCIDLINK_RUN_USER" -- bash -lc "
+    DISPLAY='${HOST_DISPLAY}' lucid config --set --DataCache.Size '${LUCIDLINK_CACHE_SIZE}' >/dev/null
+    DISPLAY='${HOST_DISPLAY}' lucid cache --info 2>/dev/null || DISPLAY='${HOST_DISPLAY}' lucid cache 2>/dev/null || true
+  " || echo "WARNING: failed to set LucidLink cache limit to ${LUCIDLINK_CACHE_SIZE}"
+}
+
+install_lucidlink_client() {
+  should_enable_lucidlink || return 0
+
+  if command -v lucid >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Installing LucidLink Linux client"
+  local deb="/tmp/lucidinstaller.deb"
+  curl -fL "$LUCIDLINK_INSTALL_URL" -o "$deb"
+  apt-get install -y "$deb"
+}
+
+start_lucidlink() {
+  should_enable_lucidlink || return 0
+
+  if ! command -v lucid >/dev/null 2>&1; then
+    echo "WARNING: LucidLink requested but lucid command is not installed"
+    return 0
+  fi
+
+  if ! id "$LUCIDLINK_RUN_USER" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash "$LUCIDLINK_RUN_USER"
+  fi
+
+  mkdir -p "$(dirname "$LUCIDLINK_TOKEN_FILE")" "$LUCIDLINK_HOST_MOUNT" "$LUCIDLINK_ROOT_PATH"
+  chown -R "${LUCIDLINK_RUN_USER}:${LUCIDLINK_RUN_USER}" "$(dirname "$LUCIDLINK_TOKEN_FILE")" "$LUCIDLINK_HOST_MOUNT" "$LUCIDLINK_ROOT_PATH" 2>/dev/null || true
+  chmod 700 "$(dirname "$LUCIDLINK_TOKEN_FILE")" 2>/dev/null || true
+
+  if [ -n "${LUCIDLINK_TOKEN:-}" ]; then
+    printf '%s' "$LUCIDLINK_TOKEN" >"$LUCIDLINK_TOKEN_FILE"
+    chown "${LUCIDLINK_RUN_USER}:${LUCIDLINK_RUN_USER}" "$LUCIDLINK_TOKEN_FILE" 2>/dev/null || true
+    chmod 600 "$LUCIDLINK_TOKEN_FILE" 2>/dev/null || true
+  fi
+
+  if [ ! -s "$LUCIDLINK_TOKEN_FILE" ]; then
+    echo "WARNING: LucidLink enabled, but no token found at ${LUCIDLINK_TOKEN_FILE}"
+    return 0
+  fi
+
+  if [ -f /etc/fuse.conf ]; then
+    sed -i 's/^#user_allow_other/user_allow_other/' /etc/fuse.conf
+  fi
+
+  if mountpoint -q "$LUCIDLINK_HOST_MOUNT"; then
+    echo "LucidLink already mounted at ${LUCIDLINK_HOST_MOUNT}"
+    return 0
+  fi
+
+  pkill -u "$LUCIDLINK_RUN_USER" -f 'lucid daemon' 2>/dev/null || true
+
+  echo "Starting LucidLink filespace ${LUCIDLINK_FILESPACE} at ${LUCIDLINK_HOST_MOUNT}"
+  runuser -u "$LUCIDLINK_RUN_USER" -- bash -lc "
+    mkdir -p '${LUCIDLINK_ROOT_PATH}' '${LUCIDLINK_HOST_MOUNT}' '${LOG_DIR}'
+    DISPLAY='${HOST_DISPLAY}' lucid daemon \
+      --fs '${LUCIDLINK_FILESPACE}' \
+      --login-token \"\$(cat '${LUCIDLINK_TOKEN_FILE}')\" \
+      --mount-point '${LUCIDLINK_HOST_MOUNT}' \
+      --root-path '${LUCIDLINK_ROOT_PATH}' \
+      --fuse-allow-other \
+      >/tmp/machine-dev-steam-headless/lucidlink.log 2>&1 &
+  "
+
+  for _ in $(seq 1 "$LUCIDLINK_WAIT_SECONDS"); do
+    if [ -d "${LUCIDLINK_HOST_MOUNT}/SteamLibrary/steamapps" ] || mountpoint -q "$LUCIDLINK_HOST_MOUNT"; then
+      echo "LucidLink mount is available"
+      configure_lucidlink_cache
+      prepare_lucidlink_steam_library
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "WARNING: LucidLink did not become ready within ${LUCIDLINK_WAIT_SECONDS}s"
+  tail -80 /tmp/machine-dev-steam-headless/lucidlink.log 2>/dev/null || true
+}
+
+seed_lucidlink_steam_library_config() {
+  [ "$MOUNT_LUCIDLINK" != "0" ] || return 0
+  [ -d "$LUCIDLINK_HOST_MOUNT/SteamLibrary" ] || return 0
+
+  local steam_root="${DATA_DIR}/home/.steam/steam"
+  local library_path="${LUCIDLINK_CONTAINER_MOUNT}/SteamLibrary"
+  local apps_block=""
+  local file
+
+  if [ -d "$LUCIDLINK_HOST_MOUNT/SteamLibrary/steamapps" ]; then
+    while IFS= read -r manifest; do
+      local appid size
+      appid="$(basename "$manifest" | sed -n 's/^appmanifest_\([0-9][0-9]*\)\.acf$/\1/p')"
+      [ -n "$appid" ] || continue
+      size="$(awk -F'"' '/"SizeOnDisk"/ { print $4; exit }' "$manifest" 2>/dev/null)"
+      [ -n "$size" ] || size=0
+      apps_block="${apps_block}			\"${appid}\"		\"${size}\"
+"
+    done < <(find "$LUCIDLINK_HOST_MOUNT/SteamLibrary/steamapps" -maxdepth 1 -type f -name 'appmanifest_*.acf' | sort)
+  fi
+
+  for file in \
+    "${steam_root}/steamapps/libraryfolders.vdf" \
+    "${steam_root}/config/libraryfolders.vdf"; do
+    mkdir -p "$(dirname "$file")"
+
+    if [ ! -s "$file" ]; then
+      cat >"$file" <<EOF
+"libraryfolders"
+{
+	"0"
+	{
+		"path"		"/home/default/.steam/steam"
+		"label"		""
+		"contentid"		"8666328081242447945"
+		"totalsize"		"0"
+		"apps"
+		{
+		}
+	}
+}
+EOF
+    fi
+
+    if grep -Fq "$library_path" "$file"; then
+      continue
+    fi
+
+    cp "$file" "${file}.bak.$(date +%s)" 2>/dev/null || true
+    sed '$d' "$file" >"${file}.tmp"
+    cat >>"${file}.tmp" <<EOF
+	"1"
+	{
+		"path"		"$library_path"
+		"label"		"LucidLink"
+		"contentid"		"1111111111111111111"
+		"totalsize"		"0"
+		"apps"
+		{
+${apps_block}
+		}
+	}
+}
+EOF
+    mv "${file}.tmp" "$file"
+  done
+
+  chown -R "${PUID}:${PGID}" "${steam_root}/steamapps" "${steam_root}/config" 2>/dev/null || true
+}
+
+localize_lucidlink_steam_state() {
+  [ "$LOCALIZE_LUCIDLINK_STEAM_STATE" = "1" ] || return 0
+  [ "$MOUNT_LUCIDLINK" != "0" ] || return 0
+  [ -d "$LUCIDLINK_HOST_MOUNT/SteamLibrary/steamapps" ] || return 0
+
+  local steamapps="${LUCIDLINK_HOST_MOUNT}/SteamLibrary/steamapps"
+  local local_root="${DATA_DIR}/home/.steam/steam/steamapps"
+  local name target backup
+
+  mkdir -p "${local_root}/compatdata-lucid" "${local_root}/shadercache-lucid"
+  chown -R "${PUID}:${PGID}" "${local_root}/compatdata-lucid" "${local_root}/shadercache-lucid" 2>/dev/null || true
+
+  for name in compatdata shadercache; do
+    target="/home/default/.steam/steam/steamapps/${name}-lucid"
+    backup="${steamapps}/${name}.lucid.bak.$(date +%s)"
+
+    if [ -L "${steamapps}/${name}" ]; then
+      continue
+    fi
+
+    if [ -e "${steamapps}/${name}" ]; then
+      mv "${steamapps}/${name}" "$backup" 2>/dev/null || true
+    fi
+
+    ln -s "$target" "${steamapps}/${name}" 2>/dev/null || true
+  done
 }
 
 tailscale_ip() {
@@ -83,7 +326,7 @@ install_basics() {
 
   apt-get update
   apt-get install -y --no-install-recommends \
-    ca-certificates curl git docker.io docker-compose containerd
+    ca-certificates curl git docker.io docker-compose containerd fuse3
 
   if is_hybrid; then
     apt-get install -y --no-install-recommends \
@@ -300,6 +543,10 @@ write_compose_file() {
 
   if [ "$MOUNT_LUCIDLINK" = "1" ] || { [ "$MOUNT_LUCIDLINK" = "auto" ] && [ -d "$LUCIDLINK_HOST_MOUNT" ]; }; then
     lucid_mount_line="      - ${LUCIDLINK_HOST_MOUNT}/:${LUCIDLINK_CONTAINER_MOUNT}/:rw"
+    case ":${STEAM_COMPAT_MOUNTS}:" in
+      *":${LUCIDLINK_CONTAINER_MOUNT}:"*) ;;
+      *) STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS}:${LUCIDLINK_CONTAINER_MOUNT}" ;;
+    esac
   fi
 
   if [ -f "$compose_file" ]; then
@@ -385,6 +632,8 @@ prepare_dirs() {
 
   chmod 1777 "${DATA_DIR}/sockets/.X11-unix" /tmp/.X11-unix 2>/dev/null || true
   chown -R "${PUID}:${PGID}" "${DATA_DIR}/home" "$GAMES_DIR" 2>/dev/null || true
+
+  prepare_lucidlink_steam_library
 }
 
 write_host_input_config() {
@@ -575,8 +824,10 @@ start_stack() {
 }
 
 wait_for_container() {
+  echo "Waiting for ${CONTAINER_NAME} to accept docker exec"
   for _ in $(seq 1 90); do
-    if docker exec "$CONTAINER_NAME" true >/dev/null 2>&1; then
+    if timeout 5 docker exec "$CONTAINER_NAME" true >/dev/null 2>&1; then
+      echo "${CONTAINER_NAME} accepts docker exec"
       return 0
     fi
     sleep 1
@@ -588,15 +839,17 @@ wait_for_container() {
 }
 
 wait_for_supervisor() {
-  for _ in $(seq 1 120); do
-    if docker exec "$CONTAINER_NAME" supervisorctl status >/dev/null 2>&1; then
+  echo "Waiting for supervisord inside ${CONTAINER_NAME}"
+  for _ in $(seq 1 "$WAIT_FOR_SUPERVISOR_SECONDS"); do
+    if timeout 2 docker exec "$CONTAINER_NAME" supervisorctl status >/dev/null 2>&1; then
+      echo "supervisord is ready"
       return 0
     fi
     sleep 1
   done
 
-  echo "WARNING: supervisorctl did not become ready in ${CONTAINER_NAME}"
-  docker logs --tail=120 "$CONTAINER_NAME" || true
+  echo "WARNING: supervisorctl did not become ready in ${CONTAINER_NAME} after ${WAIT_FOR_SUPERVISOR_SECONDS}s; continuing with best-effort hybrid startup"
+  docker logs --tail=40 "$CONTAINER_NAME" || true
 }
 
 patch_udev_xorg_restart_loop() {
@@ -609,14 +862,14 @@ patch_udev_xorg_restart_loop() {
     return 0
   fi
 
-  docker exec "$CONTAINER_NAME" bash -lc '
+  timeout 20 docker exec "$CONTAINER_NAME" bash -lc '
 set -e
 if grep -q "supervisorctl restart xorg" /usr/bin/start-dumb-udev.sh; then
   cp -n /usr/bin/start-dumb-udev.sh /usr/bin/start-dumb-udev.sh.orig 2>/dev/null || true
   sed -i "s|supervisorctl restart xorg|true # disabled by machine-dev Steam Headless launcher|" /usr/bin/start-dumb-udev.sh
 fi
 supervisorctl restart udev >/dev/null 2>&1 || pkill -f start-dumb-udev.sh 2>/dev/null || true
-'
+' || echo "WARNING: udev Xorg restart-loop patch timed out or failed; continuing"
 }
 
 stop_supervisor_desktop_services() {
@@ -625,12 +878,7 @@ stop_supervisor_desktop_services() {
   echo "Stopping container-managed desktop services for hybrid mode"
 
   docker exec "$CONTAINER_NAME" bash -lc '
-for _ in $(seq 1 10); do
-  supervisorctl stop steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit 2>/dev/null || true
-  sleep 1
-  supervisorctl status steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit 2>/dev/null \
-    | awk '"'"'$2 !~ /STOPPED|FATAL/ { bad=1 } END { exit bad }'"'"' && exit 0
-done
+supervisorctl stop steam sunshine xorg xvfb desktop x11vnc audiostream frontend neko vnc vnc-audio accounts-daemon polkit >/dev/null 2>&1 || true
 true
 '
 }
@@ -641,6 +889,10 @@ container_exec_default_detached() {
     -e DISPLAY="$HOST_DISPLAY" \
     -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" \
     -e SDL_AUDIODRIVER="pulseaudio" \
+    -e PULSE_LATENCY_MSEC="60" \
+    -e STEAM_COMPAT_MOUNTS="$STEAM_COMPAT_MOUNTS" \
+    -e PROTON_LOG="$ENABLE_PROTON_LOGS" \
+    -e PROTON_LOG_DIR="/home/default" \
     -e XDG_RUNTIME_DIR="/tmp/.X11-unix/run" \
     -d "$CONTAINER_NAME" \
     bash -lc "$1"
@@ -649,8 +901,8 @@ container_exec_default_detached() {
 wait_for_pulse() {
   is_hybrid || return 0
 
-  for _ in $(seq 1 60); do
-    if docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" pactl info >/dev/null 2>&1; then
+  for _ in $(seq 1 "$WAIT_FOR_PULSE_SECONDS"); do
+    if timeout 2 docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" pactl info >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -688,9 +940,9 @@ CONF=/home/default/.config/sunshine/sunshine.conf
 mkdir -p "$(dirname "$CONF")"
 touch "$CONF"
 if grep -q "^audio_sink" "$CONF"; then
-  sed -i "s/^audio_sink.*/audio_sink = sink-sunshine-stereo.monitor/" "$CONF"
+  sed -i "s/^audio_sink.*/audio_sink = sink-sunshine-stereo/" "$CONF"
 else
-  printf "\naudio_sink = sink-sunshine-stereo.monitor\n" >>"$CONF"
+  printf "\naudio_sink = sink-sunshine-stereo\n" >>"$CONF"
 fi
 '
     container_exec_default_detached '
@@ -711,6 +963,25 @@ sunshine >/home/default/.cache/log/sunshine-hostx.log 2>&1
 pactl set-default-sink sink-sunshine-stereo 2>/dev/null || pactl set-default-sink auto_null 2>/dev/null || true
 pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || pactl set-default-source auto_null.monitor 2>/dev/null || true
 '
+  docker exec -u default -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" "$CONTAINER_NAME" bash -lc '
+echo "==== pulse after sunshine ===="
+pactl info 2>/dev/null | grep -E "Server String|Default Sink|Default Source" || true
+pactl list short sinks 2>/dev/null || true
+pactl list short sources 2>/dev/null || true
+' >>"${LOG_DIR}/hybrid-post-start.log" 2>&1 || true
+
+  docker exec -u default "$CONTAINER_NAME" bash -lc "
+echo '==== steam library mount probes ===='
+echo STEAM_COMPAT_MOUNTS='${STEAM_COMPAT_MOUNTS}'
+for d in /mnt/games '${LUCIDLINK_CONTAINER_MOUNT}'; do
+  [ -d \"\$d\" ] || continue
+  echo \"-- \$d\"
+  stat -c '%U:%G %a %F %n' \"\$d\" 2>/dev/null || true
+  df -h \"\$d\" 2>/dev/null || true
+  mkdir -p \"\$d/SteamLibrary\" 2>/dev/null || true
+  touch \"\$d/SteamLibrary/.machine-dev-write-test\" 2>/dev/null && rm -f \"\$d/SteamLibrary/.machine-dev-write-test\" && echo WRITE_OK || echo WRITE_FAIL
+done
+" >>"${LOG_DIR}/hybrid-post-start.log" 2>&1 || true
 
   if [ "$START_CONTAINER_STEAM" = "1" ]; then
     docker exec "$CONTAINER_NAME" bash -lc 'pkill -9 -u default -f "steam|steamwebhelper" 2>/dev/null || true'
@@ -718,6 +989,10 @@ pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || pactl set-d
 mkdir -p /home/default/.cache/log
 pactl set-default-sink sink-sunshine-stereo 2>/dev/null || true
 pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || true
+export PULSE_SINK=sink-sunshine-stereo
+echo "PULSE_SERVER=${PULSE_SERVER}" >/home/default/.cache/log/steam-hostx-env.log
+echo "PULSE_SINK=${PULSE_SINK}" >>/home/default/.cache/log/steam-hostx-env.log
+echo "STEAM_COMPAT_MOUNTS=${STEAM_COMPAT_MOUNTS}" >>/home/default/.cache/log/steam-hostx-env.log
 steam -silent >/home/default/.cache/log/steam-hostx.log 2>&1
 '
     printf '%s\n' "steam launched $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
@@ -835,6 +1110,8 @@ main() {
   install_basics
   stop_existing_stacks
   prepare_devices
+  install_lucidlink_client
+  start_lucidlink
   prepare_dirs
   write_host_input_config
 
@@ -843,6 +1120,8 @@ main() {
 
   download_nvidia_driver "$nvidia_version"
   restore_steam_session
+  seed_lucidlink_steam_library_config
+  localize_lucidlink_steam_state
   write_env_file "$nvidia_version"
   write_compose_file
 
