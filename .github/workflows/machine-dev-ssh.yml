@@ -15,7 +15,7 @@ on:
         description: "Which gaming stack to start: sunshine, wolf, steam-headless, or none"
         required: true
         type: choice
-        default: "none"
+        default: "steam-headless"
         options:
           - none
           - wolf
