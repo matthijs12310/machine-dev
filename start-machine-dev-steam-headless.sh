@@ -793,7 +793,11 @@ set_mouse_passthrough_accel() {
   [ -n "$MOUSE_PASSTHROUGH_ACCEL" ] || return 0
   command -v xinput >/dev/null 2>&1 || return 0
 
-  DISPLAY="$HOST_DISPLAY" xinput list --id-only 'Mouse passthrough' 2>/dev/null | while read -r id; do
+  local ids
+  ids="$(DISPLAY="$HOST_DISPLAY" xinput list --id-only 'Mouse passthrough' 2>/dev/null || true)"
+  [ -n "$ids" ] || return 0
+
+  printf '%s\n' "$ids" | while read -r id; do
     [ -n "$id" ] || continue
     DISPLAY="$HOST_DISPLAY" xinput set-prop "$id" 'libinput Accel Speed' "$MOUSE_PASSTHROUGH_ACCEL" 2>/dev/null || true
     DISPLAY="$HOST_DISPLAY" xinput set-prop "$id" 'libinput Accel Profile Enabled' 0 1 2>/dev/null || true
