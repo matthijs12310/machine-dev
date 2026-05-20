@@ -198,16 +198,6 @@ jobs:
             echo "No Wolf pairing/config state found in repo, Wolf will generate one"
           fi
 
-          echo "Downloading Steam session release asset"
-          curl -fL \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            "https://api.github.com/repos/matthijs12310/machine-dev/releases/assets/${STEAM_SESSION_ASSET_ID}" \
-            -o /tmp/steam-session.tar.gz
-          sudo mv /tmp/steam-session.tar.gz /root/machine-dev/steam-session.tar.gz
-          sudo chmod 600 /root/machine-dev/steam-session.tar.gz
-          echo "Steam session archive restored to /root/machine-dev/steam-session.tar.gz"
-
       - name: Start gaming stack
         if: ${{ github.event.inputs.auto_start_gaming != 'false' }}
         env:
