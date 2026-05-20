@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_DIR="${SERVICE_DIR:-/opt/container-services/steam-headless}"
 DATA_DIR="${DATA_DIR:-/opt/container-data/steam-headless}"
 GAMES_DIR="${GAMES_DIR:-/mnt/games}"
@@ -47,6 +48,7 @@ START_HOST_XORG="${START_HOST_XORG:-1}"
 START_CONTAINER_XFCE="${START_CONTAINER_XFCE:-1}"
 START_CONTAINER_SUNSHINE="${START_CONTAINER_SUNSHINE:-1}"
 START_CONTAINER_STEAM="${START_CONTAINER_STEAM:-1}"
+INSTALL_CONTAINER_BROWSER="${INSTALL_CONTAINER_BROWSER:-1}"
 VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
 ENABLE_DEBUG_VNC="${ENABLE_DEBUG_VNC:-0}"
 HOST_VNC_PORT="${HOST_VNC_PORT:-5901}"
@@ -56,6 +58,7 @@ HOST_XORG_BUS_ID="${HOST_XORG_BUS_ID:-}"
 HOST_XORG_CONNECTED_MONITOR="${HOST_XORG_CONNECTED_MONITOR:-DFP-0}"
 HOST_XORG_OUTPUT="${HOST_XORG_OUTPUT:-}"
 PULSE_SERVER_PATH="${PULSE_SERVER_PATH:-/tmp/.X11-unix/run/pulse/native}"
+SUNSHINE_STATE_SOURCE_DIR="${SUNSHINE_STATE_SOURCE_DIR:-${SCRIPT_DIR}/sunshine}"
 LUCIDLINK_HOST_MOUNT="${LUCIDLINK_HOST_MOUNT:-/mnt/lucidlink}"
 LUCIDLINK_CONTAINER_MOUNT="${LUCIDLINK_CONTAINER_MOUNT:-/mnt/lucidlink}"
 MOUNT_LUCIDLINK="${MOUNT_LUCIDLINK:-auto}" # auto, 1, or 0
@@ -70,6 +73,8 @@ LUCIDLINK_CACHE_SIZE="${LUCIDLINK_CACHE_SIZE:-25G}"
 STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:-/mnt/games}"
 FIX_LUCIDLINK_PERMISSIONS="${FIX_LUCIDLINK_PERMISSIONS:-0}"
 LOCALIZE_LUCIDLINK_STEAM_STATE="${LOCALIZE_LUCIDLINK_STEAM_STATE:-1}"
+LOCALIZE_LUCIDLINK_STEAM_TOOLS="${LOCALIZE_LUCIDLINK_STEAM_TOOLS:-1}"
+STEAM_LOCAL_TOOL_APPIDS="${STEAM_LOCAL_TOOL_APPIDS:-1070560 1391110 1493710 1628350 2180100 228980 4183110}"
 ENABLE_PROTON_LOGS="${ENABLE_PROTON_LOGS:-0}"
 WAIT_FOR_SUPERVISOR_SECONDS="${WAIT_FOR_SUPERVISOR_SECONDS:-45}"
 WAIT_FOR_PULSE_SECONDS="${WAIT_FOR_PULSE_SECONDS:-25}"
@@ -164,8 +169,9 @@ start_lucidlink() {
     useradd -m -s /bin/bash "$LUCIDLINK_RUN_USER"
   fi
 
-  mkdir -p "$(dirname "$LUCIDLINK_TOKEN_FILE")" "$LUCIDLINK_HOST_MOUNT" "$LUCIDLINK_ROOT_PATH"
+  mkdir -p "$(dirname "$LUCIDLINK_TOKEN_FILE")" "$LUCIDLINK_HOST_MOUNT" "$LUCIDLINK_ROOT_PATH" "$LOG_DIR"
   chown -R "${LUCIDLINK_RUN_USER}:${LUCIDLINK_RUN_USER}" "$(dirname "$LUCIDLINK_TOKEN_FILE")" "$LUCIDLINK_HOST_MOUNT" "$LUCIDLINK_ROOT_PATH" 2>/dev/null || true
+  chown "${LUCIDLINK_RUN_USER}:${LUCIDLINK_RUN_USER}" "$LOG_DIR" 2>/dev/null || chmod 1777 "$LOG_DIR" 2>/dev/null || true
   chmod 700 "$(dirname "$LUCIDLINK_TOKEN_FILE")" 2>/dev/null || true
 
   if [ -n "${LUCIDLINK_TOKEN:-}" ]; then
@@ -199,7 +205,7 @@ start_lucidlink() {
       --mount-point '${LUCIDLINK_HOST_MOUNT}' \
       --root-path '${LUCIDLINK_ROOT_PATH}' \
       --fuse-allow-other \
-      >/tmp/machine-dev-steam-headless/lucidlink.log 2>&1 &
+      >'${LOG_DIR}/lucidlink.log' 2>&1 &
   "
 
   for _ in $(seq 1 "$LUCIDLINK_WAIT_SECONDS"); do
@@ -213,7 +219,7 @@ start_lucidlink() {
   done
 
   echo "WARNING: LucidLink did not become ready within ${LUCIDLINK_WAIT_SECONDS}s"
-  tail -80 /tmp/machine-dev-steam-headless/lucidlink.log 2>/dev/null || true
+  tail -80 "${LOG_DIR}/lucidlink.log" 2>/dev/null || true
 }
 
 seed_lucidlink_steam_library_config() {
@@ -312,6 +318,42 @@ localize_lucidlink_steam_state() {
 
     ln -s "$target" "${steamapps}/${name}" 2>/dev/null || true
   done
+}
+
+localize_lucidlink_steam_tools() {
+  [ "$LOCALIZE_LUCIDLINK_STEAM_TOOLS" = "1" ] || return 0
+  [ "$MOUNT_LUCIDLINK" != "0" ] || return 0
+  [ -d "$LUCIDLINK_HOST_MOUNT/SteamLibrary/steamapps" ] || return 0
+
+  local lucid_steamapps="${LUCIDLINK_HOST_MOUNT}/SteamLibrary/steamapps"
+  local local_steamapps="${DATA_DIR}/home/.steam/steam/steamapps"
+  local appid manifest installdir src_dir dst_dir
+
+  mkdir -p "${local_steamapps}/common"
+  chown -R "${PUID}:${PGID}" "$local_steamapps" 2>/dev/null || true
+
+  for appid in $STEAM_LOCAL_TOOL_APPIDS; do
+    manifest="${lucid_steamapps}/appmanifest_${appid}.acf"
+    [ -f "$manifest" ] || continue
+
+    installdir="$(awk -F'"' '/"installdir"/ { print $4; exit }' "$manifest" 2>/dev/null || true)"
+    if [ -n "$installdir" ]; then
+      src_dir="${lucid_steamapps}/common/${installdir}"
+      dst_dir="${local_steamapps}/common/${installdir}"
+      if [ -d "$src_dir" ] && [ ! -e "$dst_dir" ]; then
+        echo "Moving Steam tool/runtime ${appid} (${installdir}) from LucidLink to local Steam library"
+        mv "$src_dir" "$dst_dir" 2>/dev/null || true
+      elif [ -d "$src_dir" ] && [ -e "$dst_dir" ]; then
+        echo "Steam tool/runtime ${appid} already exists locally; leaving LucidLink copy in place"
+      fi
+    fi
+
+    if [ ! -f "${local_steamapps}/appmanifest_${appid}.acf" ]; then
+      mv "$manifest" "${local_steamapps}/appmanifest_${appid}.acf" 2>/dev/null || cp "$manifest" "${local_steamapps}/appmanifest_${appid}.acf" 2>/dev/null || true
+    fi
+  done
+
+  chown -R "${PUID}:${PGID}" "$local_steamapps" 2>/dev/null || true
 }
 
 tailscale_ip() {
@@ -462,6 +504,26 @@ restore_steam_session() {
   echo "Restoring Steam session archive into Steam Headless home"
   tar -xzf "$STEAM_SESSION_ARCHIVE" -C "${DATA_DIR}/home"
   chown -R "${PUID}:${PGID}" "${DATA_DIR}/home" 2>/dev/null || true
+}
+
+restore_sunshine_state() {
+  [ -d "$SUNSHINE_STATE_SOURCE_DIR" ] || return 0
+
+  local target="${DATA_DIR}/home/.config/sunshine"
+  local file
+
+  echo "Restoring Sunshine state from ${SUNSHINE_STATE_SOURCE_DIR}"
+  mkdir -p "$target"
+
+  for file in sunshine_state.json cacert.pem cakey.pem H; do
+    if [ -f "${SUNSHINE_STATE_SOURCE_DIR}/${file}" ]; then
+      cp "${SUNSHINE_STATE_SOURCE_DIR}/${file}" "${target}/${file}"
+    fi
+  done
+
+  chown -R "${PUID}:${PGID}" "$target" 2>/dev/null || true
+  chmod 700 "$target" 2>/dev/null || true
+  chmod 600 "$target"/sunshine_state.json "$target"/cacert.pem "$target"/cakey.pem "$target"/H 2>/dev/null || true
 }
 
 write_env_file() {
@@ -912,6 +974,22 @@ wait_for_pulse() {
   docker exec "$CONTAINER_NAME" bash -lc 'find /tmp /run /home/default -maxdepth 4 -type s 2>/dev/null | grep -Ei "pulse|native|audio" || true'
 }
 
+install_container_browser() {
+  [ "$INSTALL_CONTAINER_BROWSER" = "1" ] || return 0
+
+  echo "Ensuring browser is installed inside ${CONTAINER_NAME}"
+  timeout 240 docker exec "$CONTAINER_NAME" bash -lc '
+set -e
+if command -v firefox >/dev/null 2>&1 || command -v firefox-esr >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1; then
+  exit 0
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends firefox-esr || apt-get install -y --no-install-recommends chromium
+' || echo "WARNING: browser install inside ${CONTAINER_NAME} failed or timed out"
+}
+
 start_hybrid_container_services() {
   is_hybrid || return 0
 
@@ -939,11 +1017,19 @@ dbus-run-session startxfce4 >/home/default/.cache/log/xfce-hostx.log 2>&1
 CONF=/home/default/.config/sunshine/sunshine.conf
 mkdir -p "$(dirname "$CONF")"
 touch "$CONF"
-if grep -q "^audio_sink" "$CONF"; then
-  sed -i "s/^audio_sink.*/audio_sink = sink-sunshine-stereo/" "$CONF"
-else
-  printf "\naudio_sink = sink-sunshine-stereo\n" >>"$CONF"
-fi
+set_conf() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}" "$CONF"; then
+    sed -i "s|^${key}.*|${key} = ${value}|" "$CONF"
+  else
+    printf "\n%s = %s\n" "$key" "$value" >>"$CONF"
+  fi
+}
+set_conf audio_sink sink-sunshine-stereo
+set_conf file_state /home/default/.config/sunshine/sunshine_state.json
+set_conf cert /home/default/.config/sunshine/cacert.pem
+set_conf pkey /home/default/.config/sunshine/cakey.pem
 '
     container_exec_default_detached '
 mkdir -p /home/default/.cache/log
@@ -1120,8 +1206,10 @@ main() {
 
   download_nvidia_driver "$nvidia_version"
   restore_steam_session
-  seed_lucidlink_steam_library_config
+  restore_sunshine_state
   localize_lucidlink_steam_state
+  localize_lucidlink_steam_tools
+  seed_lucidlink_steam_library_config
   write_env_file "$nvidia_version"
   write_compose_file
 
@@ -1137,6 +1225,7 @@ main() {
 
   if is_hybrid; then
     stop_supervisor_desktop_services
+    install_container_browser
     start_hybrid_container_services
     start_debug_vnc
   fi
