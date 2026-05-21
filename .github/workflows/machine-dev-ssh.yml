@@ -107,8 +107,10 @@ jobs:
             authkey="${TAILSCALE_AUTHKEY}"
             install_tailscale_static
           else
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends curl jq ca-certificates
+            if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends curl python3 ca-certificates
+            fi
 
             if [ -z "${OAUTH_CLIENT_ID:-}" ] || [ -z "${OAUTH_CLIENT_SECRET:-}" ]; then
               echo "Missing Tailscale auth. Set either TAILSCALE_AUTHKEY or both OAUTH_CLIENT_ID/OAUTH_CLIENT_SECRET."
@@ -118,12 +120,12 @@ jobs:
             api_request POST "https://api.tailscale.com/api/v2/oauth/token" /tmp/ts-token.json \
               -d "client_id=${OAUTH_CLIENT_ID}&client_secret=${OAUTH_CLIENT_SECRET}&grant_type=client_credentials"
 
-            token=$(jq -er '.access_token' /tmp/ts-token.json)
+            token=$(python3 -c 'import json; print(json.load(open("/tmp/ts-token.json"))["access_token"])')
 
             api_request GET "https://api.tailscale.com/api/v2/tailnet/-/devices" /tmp/ts-devices.json \
               -H "Authorization: Bearer ${token}"
 
-            stale_ids=$(jq -r '.devices[] | select(.hostname == "machine-dev-l4-eu") | .id' /tmp/ts-devices.json)
+            stale_ids=$(python3 -c 'import json; data=json.load(open("/tmp/ts-devices.json")); print("\n".join(d["id"] for d in data.get("devices", []) if d.get("hostname") == "machine-dev-l4-eu"))')
             if [ -z "$stale_ids" ]; then
               echo "No stale node found, continuing"
             else
@@ -152,8 +154,8 @@ jobs:
                 }
               }'
 
-            authkey=$(jq -er '.key' /tmp/ts-key.json)
-            curl -fsSL https://tailscale.com/install.sh | sh
+            authkey=$(python3 -c 'import json; print(json.load(open("/tmp/ts-key.json"))["key"])')
+            install_tailscale_static
           fi
 
           sudo tailscaled --state=/tmp/tailscaled.state >/tmp/tailscaled.log 2>&1 &
