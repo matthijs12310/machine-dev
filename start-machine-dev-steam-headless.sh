@@ -71,6 +71,7 @@ HOST_XORG_OUTPUT="${HOST_XORG_OUTPUT:-}"
 PULSE_SERVER_PATH="${PULSE_SERVER_PATH:-/tmp/.X11-unix/run/pulse/native}"
 MOUSE_PASSTHROUGH_ACCEL="${MOUSE_PASSTHROUGH_ACCEL:-0}"
 SUNSHINE_STATE_SOURCE_DIR="${SUNSHINE_STATE_SOURCE_DIR:-${SCRIPT_DIR}/sunshine}"
+SUNSHINE_CSRF_ALLOWED_ORIGINS="${SUNSHINE_CSRF_ALLOWED_ORIGINS:-}"
 STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:-/mnt/games}"
 ENABLE_PROTON_LOGS="${ENABLE_PROTON_LOGS:-0}"
 WAIT_FOR_SUPERVISOR_SECONDS="${WAIT_FOR_SUPERVISOR_SECONDS:-20}"
@@ -213,6 +214,50 @@ resolve_ipv4s() {
   fi
 
   getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u
+}
+
+append_csv_unique() {
+  local list="$1"
+  local value="$2"
+
+  [ -n "$value" ] || {
+    printf '%s' "$list"
+    return 0
+  }
+
+  case ",${list}," in
+    *",${value},"*) printf '%s' "$list" ;;
+    *)
+      if [ -n "$list" ]; then
+        printf '%s,%s' "$list" "$value"
+      else
+        printf '%s' "$value"
+      fi
+      ;;
+  esac
+}
+
+sunshine_csrf_allowed_origins() {
+  if [ -n "$SUNSHINE_CSRF_ALLOWED_ORIGINS" ]; then
+    printf '%s' "$SUNSHINE_CSRF_ALLOWED_ORIGINS"
+    return 0
+  fi
+
+  local origins=""
+  local tsip
+  origins="$(append_csv_unique "$origins" "https://localhost:47990")"
+  origins="$(append_csv_unique "$origins" "https://127.0.0.1:47990")"
+
+  tsip="$(tailscale_ip | tr -d '[:space:]')"
+  if [ -n "$tsip" ]; then
+    origins="$(append_csv_unique "$origins" "https://${tsip}:47990")"
+  fi
+
+  if [ -n "$FRP_RELAY_HOST" ]; then
+    origins="$(append_csv_unique "$origins" "https://${FRP_RELAY_HOST}:${FRP_REMOTE_PORT_47990}")"
+  fi
+
+  printf '%s' "$origins"
 }
 
 configure_tailscale_exit_node() {
@@ -1345,9 +1390,11 @@ dbus-run-session startxfce4 >/home/default/.cache/log/xfce-hostx.log 2>&1
   set_mouse_passthrough_accel
 
   if [ "$START_CONTAINER_SUNSHINE" = "1" ]; then
+    local csrf_allowed_origins
+    csrf_allowed_origins="$(sunshine_csrf_allowed_origins)"
     docker exec "$CONTAINER_NAME" bash -lc 'pkill -u default -f sunshine 2>/dev/null || true'
     docker exec -u default "$CONTAINER_NAME" bash -lc "sunshine --creds '${SUNSHINE_USER}' '${SUNSHINE_PASS}' >/dev/null 2>&1 || true"
-    docker exec -u default "$CONTAINER_NAME" bash -lc '
+    docker exec -u default -e SUNSHINE_CSRF_ALLOWED_ORIGINS="$csrf_allowed_origins" "$CONTAINER_NAME" bash -lc '
 CONF=/home/default/.config/sunshine/sunshine.conf
 mkdir -p "$(dirname "$CONF")"
 touch "$CONF"
@@ -1361,6 +1408,7 @@ set_conf() {
   fi
 }
 set_conf audio_sink sink-sunshine-stereo
+set_conf csrf_allowed_origins "$SUNSHINE_CSRF_ALLOWED_ORIGINS"
 set_conf file_state /home/default/.config/sunshine/sunshine_state.json
 set_conf cert /home/default/.config/sunshine/cacert.pem
 set_conf pkey /home/default/.config/sunshine/cakey.pem
