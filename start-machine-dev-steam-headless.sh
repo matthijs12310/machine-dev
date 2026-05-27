@@ -60,6 +60,9 @@ STEAM_QR_CROP="${STEAM_QR_CROP:-}"
 STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}"
 STEAM_QR_SERVER_SOURCE="${STEAM_QR_SERVER_SOURCE:-${SCRIPT_DIR}/steam_qr_server.py}"
 STEAM_QR_PYTHON="${STEAM_QR_PYTHON:-/opt/machine-dev/qr-venv/bin/python}"
+AUTO_LOGIN_STEAM="${AUTO_LOGIN_STEAM:-0}"
+STEAM_LOGIN_USER="${STEAM_LOGIN_USER:-}"
+STEAM_LOGIN_PASS="${STEAM_LOGIN_PASS:-}"
 VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
 ENABLE_DEBUG_VNC="${ENABLE_DEBUG_VNC:-0}"
 HOST_VNC_PORT="${HOST_VNC_PORT:-5901}"
@@ -1452,7 +1455,22 @@ touch \"\$d/SteamLibrary/.machine-dev-write-test\" 2>/dev/null && rm -f \"\$d/St
   if [ "$START_CONTAINER_STEAM" = "1" ]; then
     docker exec "$CONTAINER_NAME" bash -lc 'chown -R default:default /home/default/.steam /home/default/.local /home/default/.cache 2>/dev/null || true'
     docker exec "$CONTAINER_NAME" bash -lc 'pkill -9 -u default -f "steam|steamwebhelper" 2>/dev/null || true'
-    container_exec_default_detached '
+    docker exec \
+      -u default \
+      -e DISPLAY="$HOST_DISPLAY" \
+      -e PULSE_SERVER="unix:${PULSE_SERVER_PATH}" \
+      -e SDL_AUDIODRIVER="pulseaudio" \
+      -e PULSE_LATENCY_MSEC="60" \
+      -e STEAM_COMPAT_MOUNTS="$STEAM_COMPAT_MOUNTS" \
+      -e PROTON_LOG="$ENABLE_PROTON_LOGS" \
+      -e PROTON_LOG_DIR="/home/default" \
+      -e XDG_RUNTIME_DIR="/tmp/.X11-unix/run" \
+      -e BROWSER="/usr/bin/x-www-browser" \
+      -e AUTO_LOGIN_STEAM="$AUTO_LOGIN_STEAM" \
+      -e STEAM_LOGIN_USER="$STEAM_LOGIN_USER" \
+      -e STEAM_LOGIN_PASS="$STEAM_LOGIN_PASS" \
+      -d "$CONTAINER_NAME" \
+      bash -lc '
 mkdir -p /home/default/.cache/log
 pactl set-default-sink sink-sunshine-stereo 2>/dev/null || true
 pactl set-default-source sink-sunshine-stereo.monitor 2>/dev/null || true
@@ -1498,7 +1516,17 @@ if [ "'"$AUTO_CLICK_STEAM_INSTALL"'" = "1" ] && command -v xdotool >/dev/null 2>
     done
   ) >/home/default/.cache/log/steam-install-autoclick.log 2>&1 &
 fi
-steam -silent >/home/default/.cache/log/steam-hostx.log 2>&1
+steam_args=(-silent)
+if [ "${AUTO_LOGIN_STEAM:-0}" = "1" ] &&
+  [ -n "${STEAM_LOGIN_USER:-}" ] &&
+  [ -n "${STEAM_LOGIN_PASS:-}" ]; then
+  echo "AUTO_LOGIN_STEAM=1" >>/home/default/.cache/log/steam-hostx-env.log
+  steam_args+=(-login "$STEAM_LOGIN_USER" "$STEAM_LOGIN_PASS")
+else
+  echo "AUTO_LOGIN_STEAM=0" >>/home/default/.cache/log/steam-hostx-env.log
+fi
+
+exec steam "${steam_args[@]}" >/home/default/.cache/log/steam-hostx.log 2>&1
 '
     printf '%s\n' "steam launched $(date -Is)" >>"${LOG_DIR}/hybrid-post-start.log"
   fi

@@ -287,6 +287,8 @@ jobs:
           TAILSCALE_EXIT_NODE: ${{ github.event.inputs.tailscale_exit_node }}
           STEAM_QR_CROP: ${{ secrets.STEAM_QR_CROP }}
           STEAM_QR_TOKEN: ${{ secrets.STEAM_QR_TOKEN }}
+          STEAM_LOGIN_USER: ${{ secrets.STEAM_LOGIN_USER }}
+          STEAM_LOGIN_PASS: ${{ secrets.STEAM_LOGIN_PASS }}
         run: |
           set -euo pipefail
 
@@ -330,6 +332,8 @@ jobs:
             TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-}" \
             STEAM_QR_CROP="${STEAM_QR_CROP:-}" \
             STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}" \
+            STEAM_LOGIN_USER="${STEAM_LOGIN_USER:-}" \
+            STEAM_LOGIN_PASS="${STEAM_LOGIN_PASS:-}" \
             bash -lc '
             set -euo pipefail
 
@@ -375,6 +379,9 @@ jobs:
                   STEAM_QR_PORT=8765 \
                   STEAM_QR_CROP="${STEAM_QR_CROP:-}" \
                   STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}" \
+                  AUTO_LOGIN_STEAM="$([ -n "${STEAM_LOGIN_USER:-}" ] && [ -n "${STEAM_LOGIN_PASS:-}" ] && printf 1 || printf 0)" \
+                  STEAM_LOGIN_USER="${STEAM_LOGIN_USER:-}" \
+                  STEAM_LOGIN_PASS="${STEAM_LOGIN_PASS:-}" \
                   ENABLE_FRP_STEAM_QR_RELAY=1 \
                   FRP_REMOTE_PORT_STEAM_QR=8765 \
                   DISPLAY_SIZEW=1920 \
