@@ -25,6 +25,7 @@ on:
         description: "Optional Tailscale exit node for game traffic, e.g. matt-game or moonlight-aws-relay"
         required: false
         default: ""
+
 permissions:
   contents: read
   packages: read
@@ -46,10 +47,16 @@ jobs:
         with:
           path: machine-dev
 
+      - name: Restore Tailscale state
+        uses: actions/cache/restore@v4
+        with:
+          path: .tailscale-state
+          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
+          restore-keys: |
+            tailscale-machine-dev-l4-eu-v1-
+
       - name: Install and connect Tailscale
         env:
-          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
-          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
           TAILSCALE_VERSION: "1.90.6"
         run: |
@@ -78,95 +85,65 @@ jobs:
             curl -fsSL --retry 3 --retry-delay 2 \
               -o "${tmpdir}/tailscale.tgz" \
               "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${arch}.tgz"
+
             tar -xzf "${tmpdir}/tailscale.tgz" -C "${tmpdir}"
-            sudo install -m 0755 "${tmpdir}/tailscale_${TAILSCALE_VERSION}_${arch}/tailscale" /usr/local/bin/tailscale
-            sudo install -m 0755 "${tmpdir}/tailscale_${TAILSCALE_VERSION}_${arch}/tailscaled" /usr/local/bin/tailscaled
+
+            sudo install -m 0755 \
+              "${tmpdir}/tailscale_${TAILSCALE_VERSION}_${arch}/tailscale" \
+              /usr/local/bin/tailscale
+
+            sudo install -m 0755 \
+              "${tmpdir}/tailscale_${TAILSCALE_VERSION}_${arch}/tailscaled" \
+              /usr/local/bin/tailscaled
+
             rm -rf "${tmpdir}"
           }
 
-          api_request() {
-            local method="$1"
-            local url="$2"
-            local output="$3"
-            shift 3
-
-            local code
-            code=$(curl -sS -X "$method" -w '%{http_code}' -o "$output" "$@" "$url")
-            if [ "$code" -lt 200 ] || [ "$code" -gt 299 ]; then
-              echo "Tailscale API request failed: ${method} ${url}"
-              echo "HTTP status: ${code}"
-              echo "Response body:"
-              cat "$output"
-              echo
-              exit 1
-            fi
-          }
-
-          if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
-            echo "Using existing TAILSCALE_AUTHKEY secret"
-            authkey="${TAILSCALE_AUTHKEY}"
-            install_tailscale_static
-          else
-            if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends curl python3 ca-certificates
-            fi
-
-            if [ -z "${OAUTH_CLIENT_ID:-}" ] || [ -z "${OAUTH_CLIENT_SECRET:-}" ]; then
-              echo "Missing Tailscale auth. Set either TAILSCALE_AUTHKEY or both OAUTH_CLIENT_ID/OAUTH_CLIENT_SECRET."
-              exit 1
-            fi
-
-            api_request POST "https://api.tailscale.com/api/v2/oauth/token" /tmp/ts-token.json \
-              -d "client_id=${OAUTH_CLIENT_ID}&client_secret=${OAUTH_CLIENT_SECRET}&grant_type=client_credentials"
-
-            token=$(python3 -c 'import json; print(json.load(open("/tmp/ts-token.json"))["access_token"])')
-
-            api_request GET "https://api.tailscale.com/api/v2/tailnet/-/devices" /tmp/ts-devices.json \
-              -H "Authorization: Bearer ${token}"
-
-            stale_ids=$(python3 -c 'import json; data=json.load(open("/tmp/ts-devices.json")); print("\n".join(d["id"] for d in data.get("devices", []) if d.get("hostname") == "machine-dev-l4-eu"))')
-            if [ -z "$stale_ids" ]; then
-              echo "No stale node found, continuing"
-            else
-              echo "$stale_ids" | while read -r id; do
-                echo "Deleting stale node: $id"
-                api_request DELETE "https://api.tailscale.com/api/v2/device/${id}" /tmp/ts-delete.json \
-                  -H "Authorization: Bearer ${token}"
-              done
-              echo "Deleted, waiting for propagation"
-              sleep 5
-            fi
-
-            api_request POST "https://api.tailscale.com/api/v2/tailnet/-/keys" /tmp/ts-key.json \
-              -H "Authorization: Bearer ${token}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "capabilities": {
-                  "devices": {
-                    "create": {
-                      "reusable": false,
-                      "ephemeral": true,
-                      "preauthorized": true,
-                      "tags": ["tag:ci"]
-                    }
-                  }
-                }
-              }'
-
-            authkey=$(python3 -c 'import json; print(json.load(open("/tmp/ts-key.json"))["key"])')
-            install_tailscale_static
+          if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
+            echo "Missing TAILSCALE_AUTHKEY secret."
+            echo ""
+            echo "Create a Tailscale auth key with:"
+            echo "  Reusable: yes"
+            echo "  Ephemeral: no"
+            echo "  Preauthorized: yes"
+            echo "  Tags: tag:ci"
+            exit 1
           fi
 
-          sudo tailscaled --state=/tmp/tailscaled.state >/tmp/tailscaled.log 2>&1 &
+          install_tailscale_static
+
+          mkdir -p "$GITHUB_WORKSPACE/.tailscale-state"
+
+          sudo tailscaled \
+            --state="$GITHUB_WORKSPACE/.tailscale-state/tailscaled.state" \
+            >/tmp/tailscaled.log 2>&1 &
+
           sleep 3
 
-          sudo tailscale up \
-            --authkey="${authkey}" \
-            --hostname=machine-dev-l4-eu \
-            --advertise-tags=tag:ci \
-            --ssh=false \
-            --accept-routes
+          if sudo tailscale status >/dev/null 2>&1; then
+            echo "Tailscale already authenticated from restored state"
+            sudo tailscale up \
+              --hostname=machine-dev-l4-eu \
+              --advertise-tags=tag:ci \
+              --ssh=false \
+              --accept-routes
+          else
+            echo "No valid Tailscale state; authenticating with auth key"
+            sudo tailscale up \
+              --authkey="${TAILSCALE_AUTHKEY}" \
+              --hostname=machine-dev-l4-eu \
+              --advertise-tags=tag:ci \
+              --ssh=false \
+              --accept-routes
+          fi
+
+          echo ""
+          echo "Tailscale status:"
+          tailscale status || true
+
+          echo ""
+          echo "Tailscale IP:"
+          tailscale ip -4 || true
 
       - name: Preinstall Steam Headless host packages
         if: ${{ github.event.inputs.auto_start_gaming != 'false' && github.event.inputs.gaming_stack == 'steam-headless' }}
@@ -207,6 +184,7 @@ jobs:
             -e 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' \
             -e 's/^#\?PermitRootLogin .*/PermitRootLogin prohibit-password/' \
             /etc/ssh/sshd_config
+
           sudo mkdir -p /run/sshd
           sudo systemctl restart ssh || sudo /usr/sbin/sshd
 
@@ -276,8 +254,10 @@ jobs:
           fi
 
           echo "Starting Machine.dev ${GAMING_STACK:-none} stack automatically"
+
           steam_headless_image="ghcr.io/${GITHUB_REPOSITORY}/steam-headless-machine-dev:latest"
           steam_headless_image="$(printf '%s' "$steam_headless_image" | tr '[:upper:]' '[:lower:]')"
+
           if [ "${GAMING_STACK:-none}" = "steam-headless" ]; then
             echo "${GITHUB_TOKEN}" | sudo docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
             if sudo docker pull "${steam_headless_image}"; then
@@ -287,6 +267,7 @@ jobs:
               steam_headless_image="josh5/steam-headless:latest"
             fi
           fi
+
           sudo env \
             FRP_RELAY_HOST="${FRP_RELAY_HOST:-}" \
             FRP_RELAY_PORT="${FRP_RELAY_PORT:-443}" \
@@ -295,6 +276,7 @@ jobs:
             bash -lc '
             set -euo pipefail
             cd /root/machine-dev
+
             case "'"${GAMING_STACK:-none}"'" in
               sunshine)
                 env \
@@ -310,6 +292,7 @@ jobs:
                   PULSE_SERVER=unix:/tmp/pulse-native \
                   ./start-machine-dev-gaming.sh
                 ;;
+
               wolf)
                 env \
                   STOP_EXISTING_STACKS=1 \
@@ -317,6 +300,7 @@ jobs:
                   VERIFY_NVIDIA_DOCKER=0 \
                   ./start-machine-dev-wolf.sh
                 ;;
+
               steam-headless)
                 env \
                   STOP_EXISTING_STACKS=1 \
@@ -343,7 +327,9 @@ jobs:
       - name: Print connection info
         run: |
           set -euo pipefail
+
           ipv4=$(tailscale ip -4 || true)
+
           echo ""
           echo "SSH ready:"
           echo "  ssh runner@${ipv4}"
@@ -368,13 +354,26 @@ jobs:
           echo "  tail -f /tmp/machine-dev-gaming/steam.log"
           echo "  docker logs -f wolf"
           echo ""
+
           nvidia-smi || true
 
       - name: Keep SSH alive
         run: |
           set -euo pipefail
+
           minutes='${{ github.event.inputs.keepalive_minutes }}'
-          case "$minutes" in ''|*[!0-9]*) minutes=120 ;; esac
+          case "$minutes" in
+            ''|*[!0-9]*) minutes=120 ;;
+          esac
+
           [ "$minutes" -gt 350 ] && minutes=350
+
           echo "Keeping alive for ${minutes} minutes"
           sleep "$((minutes * 60))"
+
+      - name: Save Tailscale state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .tailscale-state
+          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
