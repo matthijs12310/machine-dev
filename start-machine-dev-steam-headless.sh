@@ -61,6 +61,7 @@ STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}"
 STEAM_QR_SERVER_SOURCE="${STEAM_QR_SERVER_SOURCE:-${SCRIPT_DIR}/steam_qr_server.py}"
 STEAM_QR_PYTHON="${STEAM_QR_PYTHON:-/opt/machine-dev/qr-venv/bin/python}"
 AUTO_LOGIN_STEAM="${AUTO_LOGIN_STEAM:-0}"
+STEAM_LOGIN_USE_ARGS="${STEAM_LOGIN_USE_ARGS:-0}"
 STEAM_LOGIN_USER="${STEAM_LOGIN_USER:-}"
 STEAM_LOGIN_PASS="${STEAM_LOGIN_PASS:-}"
 VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
@@ -1467,6 +1468,7 @@ touch \"\$d/SteamLibrary/.machine-dev-write-test\" 2>/dev/null && rm -f \"\$d/St
       -e XDG_RUNTIME_DIR="/tmp/.X11-unix/run" \
       -e BROWSER="/usr/bin/x-www-browser" \
       -e AUTO_LOGIN_STEAM="$AUTO_LOGIN_STEAM" \
+      -e STEAM_LOGIN_USE_ARGS="$STEAM_LOGIN_USE_ARGS" \
       -e STEAM_LOGIN_USER="$STEAM_LOGIN_USER" \
       -e STEAM_LOGIN_PASS="$STEAM_LOGIN_PASS" \
       -d "$CONTAINER_NAME" \
@@ -1516,14 +1518,71 @@ if [ "'"$AUTO_CLICK_STEAM_INSTALL"'" = "1" ] && command -v xdotool >/dev/null 2>
     done
   ) >/home/default/.cache/log/steam-install-autoclick.log 2>&1 &
 fi
+
+if [ "${AUTO_LOGIN_STEAM:-0}" = "1" ] &&
+  [ -n "${STEAM_LOGIN_USER:-}" ] &&
+  [ -n "${STEAM_LOGIN_PASS:-}" ] &&
+  command -v xdotool >/dev/null 2>&1; then
+  (
+    fill_login_window() {
+      win="$1"
+      name="$(xdotool getwindowname "$win" 2>/dev/null || true)"
+      echo "$(date -Is) Filling Steam login window: ${name:-$win}"
+
+      eval "$(xdotool getwindowgeometry --shell "$win" 2>/dev/null || true)"
+      width="${WIDTH:-900}"
+      height="${HEIGHT:-650}"
+      x="$((width / 2))"
+      user_y="$((height / 2 - 35))"
+      pass_y="$((height / 2 + 30))"
+
+      xdotool windowactivate --sync "$win" 2>/dev/null || return 1
+      sleep 0.4
+      xdotool mousemove --window "$win" "$x" "$user_y" click 1 key --clearmodifiers ctrl+a 2>/dev/null || true
+      xdotool type --clearmodifiers --delay 18 "$STEAM_LOGIN_USER" 2>/dev/null || return 1
+      sleep 0.2
+      xdotool mousemove --window "$win" "$x" "$pass_y" click 1 key --clearmodifiers ctrl+a 2>/dev/null || true
+      xdotool type --clearmodifiers --delay 18 "$STEAM_LOGIN_PASS" 2>/dev/null || return 1
+      sleep 0.2
+      xdotool key --clearmodifiers Return 2>/dev/null || true
+      return 0
+    }
+
+    filled=0
+    for i in $(seq 1 90); do
+      for win in $(xdotool search --onlyvisible --name "Sign in to Steam" 2>/dev/null; xdotool search --onlyvisible --name "Steam Login" 2>/dev/null; xdotool search --onlyvisible --name "Steam - Sign In" 2>/dev/null); do
+        fill_login_window "$win" && filled=1 && break
+      done
+
+      if [ "$filled" = "0" ] && [ "$i" -ge 15 ]; then
+        win="$(xdotool search --onlyvisible --class steam 2>/dev/null | head -1 || true)"
+        if [ -n "$win" ]; then
+          fill_login_window "$win" && filled=1
+        fi
+      fi
+
+      if [ "$filled" = "1" ]; then
+        echo "$(date -Is) Steam login form submitted; waiting for mobile approval if required"
+        exit 0
+      fi
+
+      sleep 1
+    done
+
+    echo "$(date -Is) Steam login automation did not find a login window"
+  ) >/home/default/.cache/log/steam-login-autofill.log 2>&1 &
+fi
+
 steam_args=(-silent)
 if [ "${AUTO_LOGIN_STEAM:-0}" = "1" ] &&
   [ -n "${STEAM_LOGIN_USER:-}" ] &&
-  [ -n "${STEAM_LOGIN_PASS:-}" ]; then
+  [ -n "${STEAM_LOGIN_PASS:-}" ] &&
+  [ "${STEAM_LOGIN_USE_ARGS:-0}" = "1" ]; then
   echo "AUTO_LOGIN_STEAM=1" >>/home/default/.cache/log/steam-hostx-env.log
   steam_args+=(-login "$STEAM_LOGIN_USER" "$STEAM_LOGIN_PASS")
 else
-  echo "AUTO_LOGIN_STEAM=0" >>/home/default/.cache/log/steam-hostx-env.log
+  echo "AUTO_LOGIN_STEAM=${AUTO_LOGIN_STEAM:-0}" >>/home/default/.cache/log/steam-hostx-env.log
+  echo "STEAM_LOGIN_USE_ARGS=${STEAM_LOGIN_USE_ARGS:-0}" >>/home/default/.cache/log/steam-hostx-env.log
 fi
 
 exec steam "${steam_args[@]}" >/home/default/.cache/log/steam-hostx.log 2>&1
