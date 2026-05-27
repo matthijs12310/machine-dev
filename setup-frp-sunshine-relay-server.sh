@@ -109,10 +109,11 @@ start_service() {
   echo "Open these inbound ports in the EC2 security group:"
   echo "  TCP ${FRP_BIND_PORT}"
   echo "  TCP 47984, 47989, 47990, 48010"
+  echo "  TCP 8765 (optional Steam QR web relay)"
   echo "  UDP 47998, 47999, 48000, 48002"
   echo
   systemctl status "$FRP_SERVICE_NAME" --no-pager || true
-  ss -lntup | grep -E ":(${FRP_BIND_PORT}|47984|47989|47990|48010|47998|47999|48000|48002)\\b" || true
+  ss -lntup | grep -E ":(${FRP_BIND_PORT}|47984|47989|47990|48010|8765|47998|47999|48000|48002)\\b" || true
 }
 
 main() {

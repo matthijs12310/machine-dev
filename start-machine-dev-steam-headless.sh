@@ -57,6 +57,7 @@ START_STEAM_QR_SERVER="${START_STEAM_QR_SERVER:-1}"
 STEAM_QR_HOST="${STEAM_QR_HOST:-0.0.0.0}"
 STEAM_QR_PORT="${STEAM_QR_PORT:-8765}"
 STEAM_QR_CROP="${STEAM_QR_CROP:-}"
+STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}"
 STEAM_QR_SERVER_SOURCE="${STEAM_QR_SERVER_SOURCE:-${SCRIPT_DIR}/steam_qr_server.py}"
 STEAM_QR_PYTHON="${STEAM_QR_PYTHON:-/opt/machine-dev/qr-venv/bin/python}"
 VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
@@ -95,6 +96,8 @@ FRP_REMOTE_PORT_47998="${FRP_REMOTE_PORT_47998:-47998}"
 FRP_REMOTE_PORT_47999="${FRP_REMOTE_PORT_47999:-47999}"
 FRP_REMOTE_PORT_48000="${FRP_REMOTE_PORT_48000:-48000}"
 FRP_REMOTE_PORT_48002="${FRP_REMOTE_PORT_48002:-48002}"
+ENABLE_FRP_STEAM_QR_RELAY="${ENABLE_FRP_STEAM_QR_RELAY:-1}"
+FRP_REMOTE_PORT_STEAM_QR="${FRP_REMOTE_PORT_STEAM_QR:-8765}"
 
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
@@ -475,6 +478,18 @@ localIP = "127.0.0.1"
 localPort = 48002
 remotePort = ${FRP_REMOTE_PORT_48002}
 EOF
+
+  if [ "$START_STEAM_QR_SERVER" = "1" ] && [ "$ENABLE_FRP_STEAM_QR_RELAY" = "1" ]; then
+    cat >>"${FRP_CONFIG_DIR}/frpc-sunshine.toml" <<EOF
+
+[[proxies]]
+name = "steam-qr-${FRP_REMOTE_PORT_STEAM_QR}-tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = ${STEAM_QR_PORT}
+remotePort = ${FRP_REMOTE_PORT_STEAM_QR}
+EOF
+  fi
 
   cat >"/etc/systemd/system/${FRP_SERVICE_NAME}.service" <<EOF
 [Unit]
@@ -1273,6 +1288,7 @@ start_steam_qr_server() {
     -e QR_HOST="$STEAM_QR_HOST" \
     -e QR_PORT="$STEAM_QR_PORT" \
     -e QR_CROP="$STEAM_QR_CROP" \
+    -e QR_TOKEN="$STEAM_QR_TOKEN" \
     -e PYTHONUNBUFFERED=1 \
     -d "$CONTAINER_NAME" \
     bash -lc '
@@ -1510,6 +1526,9 @@ print_status() {
       echo "Steam QR Login:"
       echo "  http://${tsip}:${STEAM_QR_PORT}/"
       echo "  debug screenshot: http://${tsip}:${STEAM_QR_PORT}/debug.png"
+      if [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] && [ "$ENABLE_FRP_STEAM_QR_RELAY" = "1" ] && [ -n "$FRP_RELAY_HOST" ]; then
+        echo "  EC2 relay: http://${FRP_RELAY_HOST}:${FRP_REMOTE_PORT_STEAM_QR}/"
+      fi
     fi
   else
     echo "Sunshine: https://<host-ip>:47990"
@@ -1518,6 +1537,9 @@ print_status() {
     fi
     if is_hybrid && [ "$START_STEAM_QR_SERVER" = "1" ]; then
       echo "Steam QR Login: http://<host-ip>:${STEAM_QR_PORT}/"
+      if [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] && [ "$ENABLE_FRP_STEAM_QR_RELAY" = "1" ] && [ -n "$FRP_RELAY_HOST" ]; then
+        echo "Steam QR EC2 relay: http://${FRP_RELAY_HOST}:${FRP_REMOTE_PORT_STEAM_QR}/"
+      fi
     fi
   fi
   if [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] && [ -n "$FRP_RELAY_HOST" ]; then
@@ -1527,6 +1549,9 @@ print_status() {
     echo "  control port:   ${FRP_RELAY_PORT}"
     echo "  service:        ${FRP_SERVICE_NAME}"
     echo "  logs:           journalctl -u ${FRP_SERVICE_NAME} -f"
+    if [ "$START_STEAM_QR_SERVER" = "1" ] && [ "$ENABLE_FRP_STEAM_QR_RELAY" = "1" ]; then
+      echo "  QR relay:       http://${FRP_RELAY_HOST}:${FRP_REMOTE_PORT_STEAM_QR}/"
+    fi
   fi
   if [ -n "$TAILSCALE_EXIT_NODE" ]; then
     echo

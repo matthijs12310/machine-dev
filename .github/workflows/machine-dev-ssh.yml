@@ -276,6 +276,7 @@ jobs:
           FRP_TOKEN: ${{ secrets.FRP_TOKEN }}
           TAILSCALE_EXIT_NODE: ${{ github.event.inputs.tailscale_exit_node }}
           STEAM_QR_CROP: ${{ secrets.STEAM_QR_CROP }}
+          STEAM_QR_TOKEN: ${{ secrets.STEAM_QR_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -318,6 +319,7 @@ jobs:
             FRP_TOKEN="${FRP_TOKEN:-}" \
             TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-}" \
             STEAM_QR_CROP="${STEAM_QR_CROP:-}" \
+            STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}" \
             bash -lc '
             set -euo pipefail
 
@@ -362,6 +364,9 @@ jobs:
                   START_STEAM_QR_SERVER=1 \
                   STEAM_QR_PORT=8765 \
                   STEAM_QR_CROP="${STEAM_QR_CROP:-}" \
+                  STEAM_QR_TOKEN="${STEAM_QR_TOKEN:-}" \
+                  ENABLE_FRP_STEAM_QR_RELAY=1 \
+                  FRP_REMOTE_PORT_STEAM_QR=8765 \
                   DISPLAY_SIZEW=1920 \
                   DISPLAY_SIZEH=1080 \
                   DISPLAY_REFRESH=120 \
@@ -374,6 +379,8 @@ jobs:
           ' 2>&1 | sudo tee /tmp/machine-dev-gaming/launch.log
 
       - name: Print connection info
+        env:
+          FRP_RELAY_HOST: ${{ secrets.FRP_RELAY_HOST }}
         run: |
           set -euo pipefail
 
@@ -406,6 +413,9 @@ jobs:
           echo "Steam QR Login, when using steam-headless:"
           echo "  http://${ipv4}:8765/"
           echo "  debug screenshot: http://${ipv4}:8765/debug.png"
+          if [ -n "${FRP_RELAY_HOST:-}" ]; then
+            echo "  EC2 relay: http://${FRP_RELAY_HOST}:8765/"
+          fi
           echo ""
 
           nvidia-smi || true

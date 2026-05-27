@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import mss
 import numpy as np
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 from PIL import Image
 
 try:
@@ -24,12 +24,28 @@ PORT = int(os.environ.get("QR_PORT", "8765"))
 # Example:
 # QR_CROP="1180,280,360,360"
 QR_CROP = os.environ.get("QR_CROP", "")
+QR_TOKEN = os.environ.get("QR_TOKEN", "")
 
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
     "Expires": "0",
 }
+
+
+@app.before_request
+def require_token():
+    if not QR_TOKEN or request.endpoint == "health":
+        return None
+
+    auth_header = request.headers.get("Authorization", "")
+    bearer = auth_header.removeprefix("Bearer ").strip()
+    token = request.args.get("token", "")
+
+    if bearer == QR_TOKEN or token == QR_TOKEN:
+        return None
+
+    return jsonify({"ok": False, "error": "Unauthorized"}), 401, NO_CACHE_HEADERS
 
 
 def screenshot() -> Image.Image:
@@ -178,6 +194,7 @@ def status():
         "qr_available": qr is not None,
         "auto_detection_available": cv2 is not None,
         "manual_crop_enabled": bool(QR_CROP),
+        "auth_required": bool(QR_TOKEN),
         "crop": QR_CROP or None,
     })
 
