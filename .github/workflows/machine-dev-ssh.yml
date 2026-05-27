@@ -21,6 +21,15 @@ on:
           - wolf
           - sunshine
           - steam-headless
+      gpu_type:
+        description: "Which machine.dev GPU to use: l4, l40s, or rtx6000"
+        required: true
+        type: choice
+        default: "l4"
+        options:
+          - l4
+          - l40s
+          - rtx6000
       tailscale_exit_node:
         description: "Optional Tailscale exit node for game traffic, e.g. matt-game or moonlight-aws-relay"
         required: false
@@ -34,7 +43,7 @@ jobs:
   ssh:
     runs-on:
       - machine
-      - gpu=l4
+      - "gpu=${{ github.event.inputs.gpu_type || 'l4' }}"
       - cpu=16
       - regions=eu-south-2
       - tenancy=spot
@@ -51,14 +60,15 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .tailscale-cache
-          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
+          key: tailscale-machine-dev-${{ github.event.inputs.gpu_type || 'l4' }}-eu-v1-${{ github.run_id }}
           restore-keys: |
-            tailscale-machine-dev-l4-eu-v1-
+            tailscale-machine-dev-${{ github.event.inputs.gpu_type || 'l4' }}-eu-v1-
 
       - name: Install and connect Tailscale
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
           TAILSCALE_VERSION: "1.90.6"
+          GPU_TYPE: ${{ github.event.inputs.gpu_type || 'l4' }}
         run: |
           set -euo pipefail
 
@@ -132,7 +142,7 @@ jobs:
           if sudo tailscale status >/dev/null 2>&1; then
             echo "Tailscale already authenticated from restored state"
             sudo tailscale up \
-              --hostname=machine-dev-l4-eu \
+              --hostname="machine-dev-${GPU_TYPE:-l4}-eu" \
               --advertise-tags=tag:ci \
               --ssh=false \
               --accept-routes
@@ -140,7 +150,7 @@ jobs:
             echo "No valid Tailscale state; authenticating with auth key"
             sudo tailscale up \
               --authkey="${TAILSCALE_AUTHKEY}" \
-              --hostname=machine-dev-l4-eu \
+              --hostname="machine-dev-${GPU_TYPE:-l4}-eu" \
               --advertise-tags=tag:ci \
               --ssh=false \
               --accept-routes
@@ -179,7 +189,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .tailscale-cache
-          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
+          key: tailscale-machine-dev-${{ github.event.inputs.gpu_type || 'l4' }}-eu-v1-${{ github.run_id }}
 
       - name: Preinstall Steam Headless host packages
         if: ${{ github.event.inputs.auto_start_gaming != 'false' && github.event.inputs.gaming_stack == 'steam-headless' }}
@@ -381,10 +391,12 @@ jobs:
       - name: Print connection info
         env:
           FRP_RELAY_HOST: ${{ secrets.FRP_RELAY_HOST }}
+          GPU_TYPE: ${{ github.event.inputs.gpu_type || 'l4' }}
         run: |
           set -euo pipefail
 
           ipv4="$(tailscale ip -4 || true)"
+          hostname="machine-dev-${GPU_TYPE:-l4}-eu"
 
           echo ""
           echo "SSH ready:"
@@ -392,8 +404,8 @@ jobs:
           echo "  ssh root@${ipv4}"
           echo ""
           echo "Or by MagicDNS:"
-          echo "  ssh runner@machine-dev-l4-eu"
-          echo "  ssh root@machine-dev-l4-eu"
+          echo "  ssh runner@${hostname}"
+          echo "  ssh root@${hostname}"
           echo ""
           echo "Scripts:"
           echo "  cd /root/machine-dev"
