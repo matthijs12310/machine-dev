@@ -145,6 +145,14 @@ jobs:
           echo "Tailscale IP:"
           tailscale ip -4 || true
 
+      - name: Save Tailscale state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .tailscale-state
+          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
+
+
       - name: Preinstall Steam Headless host packages
         if: ${{ github.event.inputs.auto_start_gaming != 'false' && github.event.inputs.gaming_stack == 'steam-headless' }}
         run: |
@@ -371,9 +379,4 @@ jobs:
           echo "Keeping alive for ${minutes} minutes"
           sleep "$((minutes * 60))"
 
-      - name: Save Tailscale state
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: .tailscale-state
-          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
+     
