@@ -53,6 +53,12 @@ INSTALL_CONTAINER_STEAM_DEPS="${INSTALL_CONTAINER_STEAM_DEPS:-1}"
 AUTO_CLICK_STEAM_INSTALL="${AUTO_CLICK_STEAM_INSTALL:-1}"
 STEAM_SKIP_PACKAGE_CHECK="${STEAM_SKIP_PACKAGE_CHECK:-1}"
 AUTO_ACCEPT_STEAM_INSTALLER="${AUTO_ACCEPT_STEAM_INSTALLER:-1}"
+START_STEAM_QR_SERVER="${START_STEAM_QR_SERVER:-1}"
+STEAM_QR_HOST="${STEAM_QR_HOST:-0.0.0.0}"
+STEAM_QR_PORT="${STEAM_QR_PORT:-8765}"
+STEAM_QR_CROP="${STEAM_QR_CROP:-}"
+STEAM_QR_SERVER_SOURCE="${STEAM_QR_SERVER_SOURCE:-${SCRIPT_DIR}/steam_qr_server.py}"
+STEAM_QR_PYTHON="${STEAM_QR_PYTHON:-/opt/machine-dev/qr-venv/bin/python}"
 VERIFY_HOST_VULKAN="${VERIFY_HOST_VULKAN:-1}"
 ENABLE_DEBUG_VNC="${ENABLE_DEBUG_VNC:-0}"
 HOST_VNC_PORT="${HOST_VNC_PORT:-5901}"
@@ -1213,6 +1219,76 @@ xdg-settings set default-web-browser ${browser_desktop} >/dev/null 2>&1 || true
 '
 }
 
+install_container_steam_qr_server() {
+  is_hybrid || return 0
+  [ "$START_STEAM_QR_SERVER" = "1" ] || return 0
+
+  if [ ! -f "$STEAM_QR_SERVER_SOURCE" ]; then
+    echo "WARNING: Steam QR server source not found: ${STEAM_QR_SERVER_SOURCE}"
+    return 0
+  fi
+
+  echo "Installing Steam QR server inside ${CONTAINER_NAME}"
+  docker exec "$CONTAINER_NAME" mkdir -p /opt/machine-dev
+  docker cp "$STEAM_QR_SERVER_SOURCE" "${CONTAINER_NAME}:/opt/machine-dev/steam_qr_server.py"
+  docker exec "$CONTAINER_NAME" chmod 755 /opt/machine-dev/steam_qr_server.py
+
+  if docker exec "$CONTAINER_NAME" test -x "$STEAM_QR_PYTHON" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  timeout 420 docker exec "$CONTAINER_NAME" bash -lc '
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y --no-install-recommends ca-certificates python3 python3-pip python3-venv
+fi
+
+python3 -m venv /opt/machine-dev/qr-venv
+/opt/machine-dev/qr-venv/bin/pip install --no-cache-dir \
+  flask \
+  mss \
+  numpy \
+  opencv-python-headless \
+  pillow
+' || echo "WARNING: Steam QR server dependency install failed or timed out"
+}
+
+start_steam_qr_server() {
+  is_hybrid || return 0
+  [ "$START_STEAM_QR_SERVER" = "1" ] || return 0
+
+  if ! docker exec "$CONTAINER_NAME" test -f /opt/machine-dev/steam_qr_server.py >/dev/null 2>&1; then
+    echo "WARNING: Steam QR server is not installed in ${CONTAINER_NAME}"
+    return 0
+  fi
+
+  echo "Starting Steam QR server on ${STEAM_QR_HOST}:${STEAM_QR_PORT}"
+  docker exec "$CONTAINER_NAME" bash -lc 'pkill -u default -f steam_qr_server.py 2>/dev/null || true'
+  docker exec \
+    -u default \
+    -e DISPLAY="$HOST_DISPLAY" \
+    -e QR_HOST="$STEAM_QR_HOST" \
+    -e QR_PORT="$STEAM_QR_PORT" \
+    -e QR_CROP="$STEAM_QR_CROP" \
+    -e PYTHONUNBUFFERED=1 \
+    -d "$CONTAINER_NAME" \
+    bash -lc '
+mkdir -p /home/default/.cache/log
+python_bin="/opt/machine-dev/qr-venv/bin/python"
+if [ ! -x "$python_bin" ]; then
+  python_bin="$(command -v python3 || true)"
+fi
+if [ -z "$python_bin" ]; then
+  echo "python3 not available for Steam QR server"
+  exit 1
+fi
+exec "$python_bin" /opt/machine-dev/steam_qr_server.py >/home/default/.cache/log/steam-qr-server.log 2>&1
+'
+}
+
 set_mouse_passthrough_accel() {
   is_hybrid || return 0
   [ -n "$MOUSE_PASSTHROUGH_ACCEL" ] || return 0
@@ -1407,6 +1483,9 @@ print_status() {
     echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/sunshine-hostx.log"
     echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/steam-hostx.log"
     echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/xfce-hostx.log"
+    if [ "$START_STEAM_QR_SERVER" = "1" ]; then
+      echo "  docker exec ${CONTAINER_NAME} tail -f /home/default/.cache/log/steam-qr-server.log"
+    fi
   fi
   echo
   echo "Shell:"
@@ -1426,10 +1505,19 @@ print_status() {
       echo "noVNC:"
       echo "  http://${tsip}:${PORT_NOVNC_WEB}"
     fi
+    if is_hybrid && [ "$START_STEAM_QR_SERVER" = "1" ]; then
+      echo
+      echo "Steam QR Login:"
+      echo "  http://${tsip}:${STEAM_QR_PORT}/"
+      echo "  debug screenshot: http://${tsip}:${STEAM_QR_PORT}/debug.png"
+    fi
   else
     echo "Sunshine: https://<host-ip>:47990"
     if ! is_hybrid; then
       echo "noVNC: http://<host-ip>:${PORT_NOVNC_WEB}"
+    fi
+    if is_hybrid && [ "$START_STEAM_QR_SERVER" = "1" ]; then
+      echo "Steam QR Login: http://<host-ip>:${STEAM_QR_PORT}/"
     fi
   fi
   if [ "$ENABLE_FRP_SUNSHINE_RELAY" = "1" ] && [ -n "$FRP_RELAY_HOST" ]; then
@@ -1513,7 +1601,9 @@ main() {
     stop_supervisor_desktop_services
     install_container_runtime_packages
     configure_container_default_browser
+    install_container_steam_qr_server
     start_hybrid_container_services
+    start_steam_qr_server
     configure_tailscale_exit_node
     exclude_frp_relay_from_tailscale_exit_node
     start_frp_sunshine_relay

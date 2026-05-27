@@ -21,6 +21,9 @@ RUN set -eux; \
       curl \
       file \
       firefox-esr \
+      python3 \
+      python3-pip \
+      python3-venv \
       xdotool \
       xdg-user-dirs \
       xdg-utils \
@@ -51,5 +54,15 @@ RUN set -eux; \
       libxrandr2:i386 \
       libxrender1:i386 \
       libxtst6:i386; \
+    mkdir -p /opt/machine-dev; \
+    python3 -m venv /opt/machine-dev/qr-venv; \
+    /opt/machine-dev/qr-venv/bin/pip install --no-cache-dir \
+      flask \
+      mss \
+      numpy \
+      opencv-python-headless \
+      pillow; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
+
+COPY steam_qr_server.py /opt/machine-dev/steam_qr_server.py

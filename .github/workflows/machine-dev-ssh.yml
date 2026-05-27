@@ -275,6 +275,7 @@ jobs:
           FRP_RELAY_PORT: ${{ secrets.FRP_RELAY_PORT }}
           FRP_TOKEN: ${{ secrets.FRP_TOKEN }}
           TAILSCALE_EXIT_NODE: ${{ github.event.inputs.tailscale_exit_node }}
+          STEAM_QR_CROP: ${{ secrets.STEAM_QR_CROP }}
         run: |
           set -euo pipefail
 
@@ -316,6 +317,7 @@ jobs:
             FRP_RELAY_PORT="${FRP_RELAY_PORT:-443}" \
             FRP_TOKEN="${FRP_TOKEN:-}" \
             TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-}" \
+            STEAM_QR_CROP="${STEAM_QR_CROP:-}" \
             bash -lc '
             set -euo pipefail
 
@@ -357,6 +359,9 @@ jobs:
                   TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-}" \
                   INSTALL_CONTAINER_BROWSER=1 \
                   INSTALL_CONTAINER_STEAM_DEPS=1 \
+                  START_STEAM_QR_SERVER=1 \
+                  STEAM_QR_PORT=8765 \
+                  STEAM_QR_CROP="${STEAM_QR_CROP:-}" \
                   DISPLAY_SIZEW=1920 \
                   DISPLAY_SIZEH=1080 \
                   DISPLAY_REFRESH=120 \
@@ -397,6 +402,10 @@ jobs:
           echo "  tail -f /tmp/machine-dev-gaming/input-bridge.log"
           echo "  tail -f /tmp/machine-dev-gaming/steam.log"
           echo "  docker logs -f wolf"
+          echo ""
+          echo "Steam QR Login, when using steam-headless:"
+          echo "  http://${ipv4}:8765/"
+          echo "  debug screenshot: http://${ipv4}:8765/debug.png"
           echo ""
 
           nvidia-smi || true

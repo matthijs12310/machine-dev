@@ -8,6 +8,7 @@ on:
       - master
     paths:
       - steam-headless-machine-dev.Dockerfile
+      - steam_qr_server.py
       - .github/workflows/build-steam-headless-image.yml
 
 permissions:
