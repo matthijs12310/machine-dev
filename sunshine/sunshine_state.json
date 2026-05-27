@@ -21,9 +21,9 @@
                 "enabled": "true"
             },
             {
-                "name": "thor",
+                "name": "kanker",
                 "cert": "-----BEGIN CERTIFICATE-----\nMIICxjCCAa6gAwIBAgIIQsGR+x9yuT4wDQYJKoZIhvcNAQELBQAwIzEhMB8GA1UE\nAwwYTlZJRElBIEdhbWVTdHJlYW0gQ2xpZW50MB4XDTI2MDUxOTAxNTkyNVoXDTQ2\nMDUxOTAyNTkyNVowIzEhMB8GA1UEAwwYTlZJRElBIEdhbWVTdHJlYW0gQ2xpZW50\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtoKNoBalJz6kDbQM+fHj\n\/HzAl2c1XNuWPyvaf7p4FtHjyFBTdmAKZqeGfLgDtEsOrkXlgcTg06pdXAqPQCkE\n43E72HEfhWrJ3zzN8NOAsgiPt8prPPK0pq0Fp1rRSxYrLUjEYOyS6umvDg6LIGKT\nYFJ6IUk17w8S+fkpsQDin8vq33mjhRAowPEj+VrrCzle\/twQF6F+A8mDrO\/1uDbU\ny39do2LvObmCejE5P6wD5NNu88EfSpcsMz\/kR3zsRwLOsws4QHgdXJ1h+cq8Wr69\nvXv2QSYHss1B6EEjtkqbukP4UrZGoLZYxwGO5G8AkgH8WlvCTCat2nU71wnXdTpo\nGwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQAlNU1NyPHt3HVRLF9NcWVEa9SWHGle\nEP8msJd10SzRF6bRAJYKirPqTY2gtaPC7wWEJ74zyLMODqRc\/2KIZOyCbulqnju4\nxkcq0V3WHA6EK55ObhHKCMea8BcTDXm5M1tD2OwZAYeuF\/AihQisJOeMziYKLH8B\n+Hz2to9O5kE99nhgaFBVPULRjwYxFpdPqPGz9L0GzM5S55CZAm9El1nHRFHorlQM\nl1qC3GpAGSdjfhRd3DFKDhQq0OZExBraXJR+RVGv61GaAAedJknwb+Tqdkh4jfBr\nrh30zs4pTVLLNZ0FLVID5cM7oIwMeHNfOFOczLwdu3QbdbwKT+sn0xp5\n-----END CERTIFICATE-----\n",
-                "uuid": "8F1A6295-3246-7D0C-180D-AD1C280095AB",
+                "uuid": "1F72A238-6C7F-300D-EB14-C1529D89657E",
                 "enabled": "true"
             }
         ]
