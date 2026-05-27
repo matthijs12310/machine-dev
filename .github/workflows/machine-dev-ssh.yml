@@ -47,10 +47,10 @@ jobs:
         with:
           path: machine-dev
 
-      - name: Restore Tailscale state
+      - name: Restore Tailscale state cache
         uses: actions/cache/restore@v4
         with:
-          path: .tailscale-state
+          path: .tailscale-cache
           key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
           restore-keys: |
             tailscale-machine-dev-l4-eu-v1-
@@ -82,6 +82,7 @@ jobs:
             fi
 
             tmpdir="$(mktemp -d)"
+
             curl -fsSL --retry 3 --retry-delay 2 \
               -o "${tmpdir}/tailscale.tgz" \
               "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${arch}.tgz"
@@ -114,6 +115,14 @@ jobs:
 
           mkdir -p "$GITHUB_WORKSPACE/.tailscale-state"
 
+          if [ -f "$GITHUB_WORKSPACE/.tailscale-cache/tailscaled.state" ]; then
+            echo "Restoring cached Tailscale state"
+            sudo cp "$GITHUB_WORKSPACE/.tailscale-cache/tailscaled.state" \
+              "$GITHUB_WORKSPACE/.tailscale-state/tailscaled.state"
+          else
+            echo "No cached Tailscale state found; first run will authenticate with auth key"
+          fi
+
           sudo tailscaled \
             --state="$GITHUB_WORKSPACE/.tailscale-state/tailscaled.state" \
             >/tmp/tailscaled.log 2>&1 &
@@ -145,18 +154,38 @@ jobs:
           echo "Tailscale IP:"
           tailscale ip -4 || true
 
-      - name: Save Tailscale state
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: .tailscale-state
-          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
+      - name: Snapshot Tailscale state for cache
+        run: |
+          set -euo pipefail
 
+          mkdir -p "$GITHUB_WORKSPACE/.tailscale-cache"
+
+          if [ ! -f "$GITHUB_WORKSPACE/.tailscale-state/tailscaled.state" ]; then
+            echo "Missing Tailscale state file; cannot snapshot"
+            ls -la "$GITHUB_WORKSPACE/.tailscale-state" || true
+            exit 1
+          fi
+
+          sudo cp "$GITHUB_WORKSPACE/.tailscale-state/tailscaled.state" \
+            "$GITHUB_WORKSPACE/.tailscale-cache/tailscaled.state"
+
+          sudo chown -R "$USER:$USER" "$GITHUB_WORKSPACE/.tailscale-cache"
+          chmod -R u+rwX "$GITHUB_WORKSPACE/.tailscale-cache"
+
+          echo "Snapshot state:"
+          ls -la "$GITHUB_WORKSPACE/.tailscale-cache"
+
+      - name: Save Tailscale state cache
+        uses: actions/cache/save@v4
+        with:
+          path: .tailscale-cache
+          key: tailscale-machine-dev-l4-eu-v1-${{ github.run_id }}
 
       - name: Preinstall Steam Headless host packages
         if: ${{ github.event.inputs.auto_start_gaming != 'false' && github.event.inputs.gaming_stack == 'steam-headless' }}
         run: |
           set -euo pipefail
+
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             dbus-x11 \
@@ -175,6 +204,7 @@ jobs:
           SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+
           sudo apt-get install -y --no-install-recommends openssh-server
 
           mkdir -p "$HOME/.ssh"
@@ -213,12 +243,16 @@ jobs:
           sudo bash -c 'chmod +x /root/machine-dev/*.py'
 
           sudo mkdir -p /root/.config/sunshine/credentials
+
           sudo cp /root/machine-dev/sunshine/sunshine_state.json \
             /root/.config/sunshine/sunshine_state.json
+
           sudo cp /root/machine-dev/sunshine/cacert.pem \
             /root/.config/sunshine/credentials/cacert.pem
+
           sudo cp /root/machine-dev/sunshine/cakey.pem \
             /root/.config/sunshine/credentials/cakey.pem
+
           sudo chmod 600 /root/.config/sunshine/credentials/cakey.pem
           echo "Sunshine pairing state restored"
 
@@ -268,6 +302,7 @@ jobs:
 
           if [ "${GAMING_STACK:-none}" = "steam-headless" ]; then
             echo "${GITHUB_TOKEN}" | sudo docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
             if sudo docker pull "${steam_headless_image}"; then
               echo "Using Steam Headless image: ${steam_headless_image}"
             else
@@ -283,6 +318,7 @@ jobs:
             TAILSCALE_EXIT_NODE="${TAILSCALE_EXIT_NODE:-}" \
             bash -lc '
             set -euo pipefail
+
             cd /root/machine-dev
 
             case "'"${GAMING_STACK:-none}"'" in
@@ -336,7 +372,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ipv4=$(tailscale ip -4 || true)
+          ipv4="$(tailscale ip -4 || true)"
 
           echo ""
           echo "SSH ready:"
@@ -370,6 +406,7 @@ jobs:
           set -euo pipefail
 
           minutes='${{ github.event.inputs.keepalive_minutes }}'
+
           case "$minutes" in
             ''|*[!0-9]*) minutes=120 ;;
           esac
@@ -377,6 +414,6 @@ jobs:
           [ "$minutes" -gt 350 ] && minutes=350
 
           echo "Keeping alive for ${minutes} minutes"
-          sleep "$((minutes * 60))"
+          echo "Canceling the workflow later is okay; Tailscale state was already snapshotted and cached."
 
-     
+          sleep "$((minutes * 60))"
