@@ -1529,22 +1529,20 @@ if [ "${AUTO_LOGIN_STEAM:-0}" = "1" ] &&
       name="$(xdotool getwindowname "$win" 2>/dev/null || true)"
       echo "$(date -Is) Filling Steam login window: ${name:-$win}"
 
-      eval "$(xdotool getwindowgeometry --shell "$win" 2>/dev/null || true)"
-      width="${WIDTH:-900}"
-      height="${HEIGHT:-650}"
-      x="$((width / 2))"
-      user_y="$((height / 2 - 35))"
-      pass_y="$((height / 2 + 30))"
-
       xdotool windowactivate --sync "$win" 2>/dev/null || return 1
-      sleep 0.4
-      xdotool mousemove --window "$win" "$x" "$user_y" click 1 key --clearmodifiers ctrl+a 2>/dev/null || true
+      sleep 0.8
+
+      # Steam opens with the account-name field focused. Avoid mouse coordinates:
+      # select current account text, type username, tab to password, submit.
+      xdotool key --clearmodifiers ctrl+a 2>/dev/null || true
       xdotool type --clearmodifiers --delay 18 "$STEAM_LOGIN_USER" 2>/dev/null || return 1
-      sleep 0.2
-      xdotool mousemove --window "$win" "$x" "$pass_y" click 1 key --clearmodifiers ctrl+a 2>/dev/null || true
+      sleep 0.25
+      xdotool key --clearmodifiers Tab 2>/dev/null || return 1
+      sleep 0.25
+      xdotool key --clearmodifiers ctrl+a 2>/dev/null || true
       xdotool type --clearmodifiers --delay 18 "$STEAM_LOGIN_PASS" 2>/dev/null || return 1
-      sleep 0.2
-      xdotool key --clearmodifiers Return 2>/dev/null || true
+      sleep 0.25
+      xdotool key --clearmodifiers Return 2>/dev/null || return 1
       return 0
     }
 
