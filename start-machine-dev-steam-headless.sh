@@ -1478,12 +1478,18 @@ if [ "'"$AUTO_ACCEPT_STEAM_INSTALLER"'" = "1" ]; then
 fi
 if [ "'"$AUTO_CLICK_STEAM_INSTALL"'" = "1" ] && command -v xdotool >/dev/null 2>&1; then
   (
-    for _ in $(seq 1 180); do
-      for win in $(xdotool search --onlyvisible --name "Install Steam" 2>/dev/null; xdotool search --onlyvisible --name "Steam Setup" 2>/dev/null; xdotool search --onlyvisible --name "Steam" 2>/dev/null; xdotool search --onlyvisible --class "zenity" 2>/dev/null); do
+    for _ in $(seq 1 45); do
+      if pgrep -u default -f steamwebhelper >/dev/null 2>&1 &&
+        xdotool search --onlyvisible --class steam >/dev/null 2>&1; then
+        echo "$(date -Is) Steam UI is visible; stopping installer autoclick"
+        exit 0
+      fi
+
+      for win in $(xdotool search --onlyvisible --name "Install Steam" 2>/dev/null; xdotool search --onlyvisible --name "Steam Setup" 2>/dev/null; xdotool search --onlyvisible --name "Steam - Self Updater" 2>/dev/null; xdotool search --onlyvisible --name "Question" 2>/dev/null; xdotool search --onlyvisible --name "Warning" 2>/dev/null; xdotool search --onlyvisible --class "zenity" 2>/dev/null); do
         name="$(xdotool getwindowname "$win" 2>/dev/null || true)"
         [ -n "$name" ] && printf "%s %s\n" "$(date -Is)" "$name"
         case "$name" in
-          *"Install Steam"*|*"Steam Setup"*|*"Steam - Self Updater"*|*"Question"*|*"Warning"*|*"Steam"*)
+          *"Install Steam"*|*"Steam Setup"*|*"Steam - Self Updater"*|*"Question"*|*"Warning"*)
             xdotool windowactivate --sync "$win" key --clearmodifiers Return 2>/dev/null || true
             ;;
         esac
