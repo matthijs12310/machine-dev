@@ -1,0 +1,33 @@
+name: machine.dev terminal
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terminal:
+    runs-on: machine/gpu=L4
+    timeout-minutes: 180
+
+    steps:
+      - name: System info
+        run: |
+          echo "User: $(whoami)"
+          echo "Kernel:"
+          uname -a
+          echo
+          echo "OS:"
+          cat /etc/os-release || true
+          echo
+          echo "GPU:"
+          nvidia-smi || true
+          echo
+          echo "PCI GPUs:"
+          lspci -nn | grep -Ei 'nvidia|vga|3d|display' || true
+          echo
+          echo "KVM:"
+          ls -l /dev/kvm || true
+
+      - name: Start SSH terminal
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
