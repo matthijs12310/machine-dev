@@ -45,8 +45,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            openssh-server curl ca-certificates \
-            vulkan-tools mesa-utils pciutils
+            openssh-server nfs-common
 
       - name: Tailscale up
         env:
@@ -98,12 +97,21 @@ jobs:
           path: /tmp/devbox-access/devbox_key
           retention-days: 1
 
+      - name: Mount NAS library
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/nas
+          sudo mount -t nfs4 100.89.163.12:/export/roms /mnt/nas
+          ls /mnt/nas | head -5
+
       - name: Start Eden stream container
         env:
           EDEN_PASSWORD: ${{ secrets.EDEN_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p ~/eden-config
+          # Custom image bakes the labwc-autostart/env fix; 99-emu-setup.sh
+          # (custom-init) registers /config/roms gamedir + installs keys/fw from /nas.
           sudo docker run -d --name=eden --gpus all \
             -e PUID="$(id -u)" -e PGID="$(id -g)" -e TZ=Etc/UTC \
             -e PIXELFLUX_WAYLAND=true -e AUTO_GPU=true \
@@ -111,28 +119,11 @@ jobs:
             -e PASSWORD="${EDEN_PASSWORD:-changeme}" \
             -p 3000:3000 -p 3001:3001 \
             -v ~/eden-config:/config \
+            -v /mnt/nas:/nas:ro \
+            -v /mnt/nas:/config/roms:ro \
             --shm-size=1gb --restart unless-stopped \
-            lscr.io/linuxserver/eden:latest
-          # Wait for labwc autostart, then force explicit Wayland env
-          # (stock script relies on inherited env that doesn't survive s6 -> grey screen)
-          for i in $(seq 1 60); do
-            sudo docker exec eden test -f /config/.config/labwc/autostart 2>/dev/null && break
-            sleep 5
-          done
-          sudo docker exec -i eden tee /config/.config/labwc/autostart >/dev/null <<'AUTOSTART'
-          #!/bin/bash
-          if [ ! -f "${HOME}/.config/eden/qt-config.ini" ]; then
-            mkdir -p "${HOME}/.config/eden/"
-            cp /defaults/qt-config.ini "${HOME}/.config/eden/"
-          fi
-          export HOME=/config
-          export XDG_RUNTIME_DIR=/config/.XDG
-          export WAYLAND_DISPLAY=wayland-1
-          export QT_QPA_PLATFORM=wayland
-          exec eden
-          AUTOSTART
-          sudo docker restart eden
-          sleep 30
+            ghcr.io/matthijs12310/machine-dev/eden-machine-dev:latest
+          sleep 90
           sudo docker exec eden pgrep -a -x eden | head -2 || echo "eden not up yet, check docker logs"
 
       - name: Print connection info
