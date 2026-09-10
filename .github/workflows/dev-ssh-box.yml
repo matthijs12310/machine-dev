@@ -19,10 +19,10 @@ on:
         description: "spot = cheap, can die mid-game. on_demand = stays up"
         required: true
         type: choice
-        default: "on_demand"
+        default: "spot"
         options:
-          - on_demand
           - spot
+          - on_demand
 
 permissions:
   contents: read
