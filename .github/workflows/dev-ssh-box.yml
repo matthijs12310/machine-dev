@@ -15,6 +15,14 @@ on:
         options:
           - l4
           - a10g
+      tenancy:
+        description: "spot = cheap, can die mid-game. on_demand = stays up"
+        required: true
+        type: choice
+        default: "on_demand"
+        options:
+          - on_demand
+          - spot
 
 permissions:
   contents: read
@@ -27,7 +35,7 @@ jobs:
       - "gpu=${{ github.event.inputs.gpu_type || 'l4' }}"
       - cpu=8
       - regions=eu-south-2
-      - tenancy=spot
+      - "tenancy=${{ github.event.inputs.tenancy || 'on_demand' }}"
       - disk_size=200
     timeout-minutes: 360
 
@@ -38,8 +46,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             openssh-server curl ca-certificates \
-            vulkan-tools mesa-utils pciutils \
-            xvfb x11-apps
+            vulkan-tools mesa-utils pciutils
 
       - name: Tailscale up
         env:
@@ -61,7 +68,7 @@ jobs:
             --accept-dns=false
           tailscale ip -4
           nvidia-smi | head -8
-          ls -l /dev/dri /dev/uinput 2>&1 || true
+          ls /dev/dri /dev/uinput 2>&1 || true
 
       - name: SSH access (your key + ephemeral key for agent)
         env:
@@ -90,6 +97,49 @@ jobs:
           name: devbox-ssh-key
           path: /tmp/devbox-access/devbox_key
           retention-days: 1
+
+      - name: Start Eden stream container
+        env:
+          EDEN_PASSWORD: ${{ secrets.EDEN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/eden-config
+          sudo docker run -d --name=eden --gpus all \
+            -e PUID="$(id -u)" -e PGID="$(id -g)" -e TZ=Etc/UTC \
+            -e PIXELFLUX_WAYLAND=true -e AUTO_GPU=true \
+            -e SELKIES_ENCODER=nvh264enc \
+            -e PASSWORD="${EDEN_PASSWORD:-changeme}" \
+            -p 3000:3000 -p 3001:3001 \
+            -v ~/eden-config:/config \
+            --shm-size=1gb --restart unless-stopped \
+            lscr.io/linuxserver/eden:latest
+          # Wait for labwc autostart, then force explicit Wayland env
+          # (stock script relies on inherited env that doesn't survive s6 -> grey screen)
+          for i in $(seq 1 60); do
+            sudo docker exec eden test -f /config/.config/labwc/autostart 2>/dev/null && break
+            sleep 5
+          done
+          sudo docker exec -i eden tee /config/.config/labwc/autostart >/dev/null <<'AUTOSTART'
+          #!/bin/bash
+          if [ ! -f "${HOME}/.config/eden/qt-config.ini" ]; then
+            mkdir -p "${HOME}/.config/eden/"
+            cp /defaults/qt-config.ini "${HOME}/.config/eden/"
+          fi
+          export HOME=/config
+          export XDG_RUNTIME_DIR=/config/.XDG
+          export WAYLAND_DISPLAY=wayland-1
+          export QT_QPA_PLATFORM=wayland
+          exec eden
+          AUTOSTART
+          sudo docker restart eden
+          sleep 30
+          sudo docker exec eden pgrep -a -x eden | head -2 || echo "eden not up yet, check docker logs"
+
+      - name: Print connection info
+        run: |
+          echo "TAILNET: $(tailscale ip -4 | head -1)"
+          echo "Eden UI: https://$(tailscale ip -4 | head -1):3001 (user abc)"
+          echo "SSH: ssh -i ~/.ssh/md-test/devbox_key runner@$(tailscale ip -4 | head -1)"
 
       - name: Keep alive
         run: |
