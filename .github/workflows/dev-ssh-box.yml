@@ -104,6 +104,11 @@ jobs:
           sudo mount -t nfs4 100.89.163.12:/export/roms /mnt/nas
           ls /mnt/nas | head -5
 
+      - name: Login to GHCR (private custom images)
+        run: |
+          set -euo pipefail
+          echo "${{ github.token }}" | sudo docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Start Eden stream container
         env:
           EDEN_PASSWORD: ${{ secrets.EDEN_PASSWORD }}
