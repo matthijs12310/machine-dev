@@ -1,0 +1,100 @@
+name: Dev SSH box (test runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      keepalive_minutes:
+        description: "How long to keep the runner alive"
+        required: true
+        default: "350"
+      gpu_type:
+        description: "Which machine.dev GPU to use"
+        required: true
+        type: choice
+        default: "l4"
+        options:
+          - l4
+          - a10g
+
+permissions:
+  contents: read
+
+jobs:
+  devbox:
+    runs-on:
+      - machine
+      - "machine/id=${{ github.run_id }}"
+      - "gpu=${{ github.event.inputs.gpu_type || 'l4' }}"
+      - cpu=8
+      - regions=eu-south-2
+      - tenancy=spot
+      - disk_size=200
+    timeout-minutes: 360
+
+    steps:
+      - name: Install basics
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            openssh-server curl ca-certificates \
+            vulkan-tools mesa-utils pciutils \
+            xvfb x11-apps
+
+      - name: Tailscale up
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://pkgs.tailscale.com/stable/tailscale_1.90.6_amd64.tgz -o /tmp/ts.tgz
+          tar -xzf /tmp/ts.tgz -C /tmp
+          sudo install -m 0755 /tmp/tailscale_1.90.6_amd64/tailscale /usr/local/bin/tailscale
+          sudo install -m 0755 /tmp/tailscale_1.90.6_amd64/tailscaled /usr/local/bin/tailscaled
+          sudo mkdir -p /var/lib/tailscale /var/run/tailscale
+          sudo tailscaled --tun=autodetect \
+            --statedir=/var/lib/tailscale \
+            --socket=/var/run/tailscale/tailscaled.sock >/tmp/tailscaled.log 2>&1 &
+          sleep 4
+          sudo tailscale up \
+            --authkey="${TAILSCALE_AUTHKEY}" \
+            --hostname="machine-dev-test" \
+            --accept-dns=false
+          tailscale ip -4
+          nvidia-smi | head -8
+          ls -l /dev/dri /dev/uinput 2>&1 || true
+
+      - name: SSH access (your key + ephemeral key for agent)
+        env:
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${SSH_PUBLIC_KEY}" > "$HOME/.ssh/authorized_keys"
+          chmod 600 "$HOME/.ssh/authorized_keys"
+          sudo mkdir -p /root/.ssh && sudo chmod 700 /root/.ssh
+          printf '%s\n' "${SSH_PUBLIC_KEY}" | sudo tee /root/.ssh/authorized_keys >/dev/null
+          ssh-keygen -t ed25519 -N "" -f /tmp/devbox_key -C "devbox-${{ github.run_id }}"
+          cat /tmp/devbox_key.pub >> "$HOME/.ssh/authorized_keys"
+          mkdir -p /tmp/devbox-access && cp /tmp/devbox_key /tmp/devbox-access/
+          chmod 600 /tmp/devbox-access/devbox_key
+          sudo mkdir -p /run/sshd
+          sudo sed -i -e 's/^#\?PubkeyAuthentication .*/PubkeyAuthentication yes/' \
+                      -e 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' \
+                      /etc/ssh/sshd_config
+          sudo systemctl restart ssh || sudo /usr/sbin/sshd
+          echo "TAILNET_IP=$(tailscale ip -4 | head -1)"
+
+      - name: Upload agent access key
+        uses: actions/upload-artifact@v4
+        with:
+          name: devbox-ssh-key
+          path: /tmp/devbox-access/devbox_key
+          retention-days: 1
+
+      - name: Keep alive
+        run: |
+          minutes='${{ github.event.inputs.keepalive_minutes }}'
+          case "$minutes" in ''|*[!0-9]*) minutes=120 ;; esac
+          [ "$minutes" -gt 350 ] && minutes=350
+          echo "Alive for ${minutes} minutes. Cancel the run to stop (billing stops too)."
+          sleep "$((minutes * 60))"
